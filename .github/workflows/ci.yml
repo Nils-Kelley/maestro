@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The page's script parses
+        shell: bash
+        run: node tools/check-page.mjs
+      - name: Leak check
+        shell: bash
+        run: node tools/leak-check.mjs --all
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: Release build
+        working-directory: src-tauri
+        run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maestro-windows-x64
+          path: |
+            src-tauri/target/release/maestro.exe
+            src-tauri/target/release/WebView2Loader.dll
+          if-no-files-found: warn

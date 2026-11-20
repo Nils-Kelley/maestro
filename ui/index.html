@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Maestro</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<style>
+/* Flight deck. One sheet of dark glass over the desktop; thin strokes, one cool accent, numbers in mono. The box at the top is always
+   live; the left column is what matched, the right is the thing itself. Status is a shape and a word, never colour alone. */
+:root {
+  --glass: rgba(9, 12, 17, 0.72); --raise: rgba(255, 255, 255, 0.035); --raise2: rgba(255, 255, 255, 0.06); --line: rgba(255, 255, 255, 0.085); --line2: rgba(255, 255, 255, 0.16);
+  --fg: #eef1f5; --ink2: #c0c6cf; --dim: #8a92a0; --faint: #5a6270; --accent: #5cc8ff; --sel: rgba(92, 200, 255, 0.1);
+  --ok: #2fb65a; --warn: #fab219; --bad: #f0605f; --track: rgba(255, 255, 255, 0.07);
+  --s1: #27405f; --s2: #2f5d92; --s3: #3d7fc6; --s4: #62a4ee; --s5: #a9d0fb; /* one hue, further along = lighter (the ledger's stages) */
+  --sans: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, sans-serif; --disp: "Segoe UI Variable Display", "Segoe UI", Inter, system-ui, sans-serif; --mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: transparent; color: var(--fg); font: 13.5px/1.5 var(--sans); overflow: hidden; -webkit-font-smoothing: antialiased; }
+::selection { background: rgba(92, 200, 255, 0.3); }
+#panel { position: absolute; inset: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; background: var(--glass); border: 1px solid var(--line2); border-radius: 0; overflow: hidden; }
+#panel::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, transparent, rgba(92, 200, 255, 0.55) 18%, rgba(92, 200, 255, 0.55) 34%, transparent 62%); pointer-events: none; }
+#panel.in { animation: rise 170ms var(--ease); }
+@keyframes rise { from { opacity: 0; transform: translateY(8px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+#top { display: flex; align-items: center; gap: 12px; padding: 16px 22px 11px; }
+#top svg { flex: none; color: var(--accent); }
+#q { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--fg); font: 400 20px/1.3 var(--disp); letter-spacing: -0.012em; caret-color: var(--accent); }
+#q::placeholder { color: var(--faint); }
+#proj { color: var(--dim); white-space: nowrap; }
+#proj select { width: 150px; background: none; border: 0; color: var(--ink2); font: inherit; cursor: pointer; outline: 0; text-overflow: ellipsis; } #proj select option { background: #10141a; color: var(--fg); }
+#tabsrow { display: flex; align-items: center; border-bottom: 1px solid var(--line); padding-right: 14px; min-width: 0; }
+#tabs { display: flex; gap: 20px; padding: 0 22px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; } #tabs::-webkit-scrollbar { display: none; }
+#tabs button { white-space: nowrap; flex: none; }
+#popview { display: inline-flex; gap: 6px; align-items: center; background: none; border: 1px solid transparent; border-radius: 7px; color: var(--dim); font: inherit; font-size: 12.5px; padding: 3px 8px; cursor: pointer; flex: none; } #popview:hover { color: var(--fg); border-color: var(--line2); background: var(--raise); }
+button.star { background: none; border: 0; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; padding: 0 4px; } button.star:hover { color: var(--warn); } button.star.on { color: var(--warn); }
+.win button[aria-pressed="true"] { color: var(--accent); background: var(--sel); }
+/* a view in a window of its own: an ordinary window with the system's frame, showing that one view */
+body.view { background: #0d1116; } body.view #panel { border: 0; background: #0d1116; } body.view #panel::before { display: none; } body.view .win, body.view #tabsrow, body.view #boot { display: none; }
+body.view #top { padding-top: 12px; } #vtitle { font: 600 15px var(--disp); white-space: nowrap; } #vtitle:empty { display: none; }
+#tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--dim); font: inherit; padding: 6px 0 9px; cursor: pointer; transition: color 120ms; }
+#tabs button:hover { color: var(--ink2); }
+#tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+#tabs button span { color: var(--faint); margin-left: 5px; font: 11.5px var(--mono); }
+#body { min-height: 0; display: grid; grid-template-columns: 410px minmax(0, 1fr); }
+#body.home { grid-template-columns: minmax(0, 1fr); }
+#list { overflow-y: auto; border-right: 1px solid var(--line); padding: 8px; }
+#body.home #list { display: none; }
+.item { position: relative; display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 7px 12px; border-radius: 8px; cursor: pointer; }
+.item:hover { background: var(--raise); }
+.item[aria-selected="true"] { background: var(--sel); }
+.item[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 2px; border-radius: 1px; background: var(--accent); }
+.item .t { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item .s { display: block; color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item.new { color: var(--accent); }
+.group { color: var(--faint); font-size: 12px; padding: 10px 12px 3px; }
+#view { overflow-y: auto; padding: 20px 26px 26px; min-width: 0; }
+#view > * { animation: fade 130ms var(--ease); }
+#view h1 { font: 600 18px/1.3 var(--disp); margin: 0 0 3px; letter-spacing: -0.012em; }
+#view .meta { color: var(--dim); font-size: 12.5px; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 5px 14px; align-items: center; }
+#view .text { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 80ch; color: var(--ink2); }
+#view .text b { color: var(--fg); font-weight: 600; }
+#view .text h2 { font: 600 14px var(--sans); color: var(--fg); margin: 14px 0 2px; }
+#view .text code, code { font-family: var(--mono); font-size: 12.5px; background: var(--raise2); padding: 0 4px; border-radius: 3px; }
+#view .text mark { background: rgba(92, 200, 255, 0.24); color: inherit; border-radius: 2px; }
+textarea { width: 100%; height: calc(100% - 96px); min-height: 300px; resize: none; background: rgba(0, 0, 0, 0.3); color: var(--fg); border: 1px solid var(--line2); border-radius: 8px; padding: 12px; font: 12.5px/1.6 var(--mono); outline: 0; }
+textarea:focus, input.in:focus, select.in:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(92, 200, 255, 0.12); }
+button.act { background: var(--raise); border: 1px solid var(--line2); border-radius: 7px; color: var(--fg); font: inherit; font-size: 12.5px; padding: 3px 10px; cursor: pointer; transition: background 120ms, border-color 120ms; }
+button.act:hover { background: var(--raise2); border-color: rgba(255, 255, 255, 0.26); }
+button.act.go { background: var(--accent); color: #04121b; border-color: var(--accent); font-weight: 600; }
+button.act:disabled { opacity: 0.55; cursor: default; }
+kbd { font: 11px var(--mono); color: var(--dim); border: 1px solid var(--line2); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+#foot { display: flex; gap: 18px; align-items: center; padding: 8px 22px; border-top: 1px solid var(--line); color: var(--dim); font-size: 12.5px; }
+#foot .msg { margin-left: auto; } #foot .msg.bad { color: var(--bad); } #foot .msg.ok { color: var(--ok); }
+.ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .dim { color: var(--dim); }
+h3.sec { font: 600 12.5px var(--sans); color: var(--dim); margin: 22px 0 8px; letter-spacing: 0.01em; }
+table { border-collapse: collapse; width: 100%; } td { padding: 6px 12px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; } td.k { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 500; color: var(--dim); font-size: 12.5px; padding: 5px 12px 5px 0; border-bottom: 1px solid var(--line2); white-space: nowrap; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+input.in, select.in { background: rgba(0, 0, 0, 0.3); color: var(--fg); border: 1px solid var(--line2); border-radius: 7px; padding: 3px 8px; font: inherit; font-size: 12.5px; outline: 0; } select.in option { background: #10141a; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .lead { color: var(--dim); max-width: 80ch; margin: 0 0 12px; }
+.slot { margin: 0 0 14px; } .slot:empty { display: none; }
+label.chk { display: inline-flex; gap: 8px; align-items: center; color: var(--dim); cursor: pointer; }
+.form { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px 14px; align-items: start; max-width: 780px; } .form label { color: var(--dim); padding-top: 4px; } .form input.in, .form select.in { width: 100%; padding: 6px 9px; font-size: 13.5px; } .form textarea { height: 250px; min-height: 0; }
+
+/* ---- the deck (home) ---- */
+.deck { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; }
+.pane { position: relative; background: var(--raise); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 15px; min-width: 0; }
+.pane.wide { grid-column: 1 / -1; }
+.pane::before, .pane::after { content: ""; position: absolute; width: 9px; height: 9px; border: 1px solid rgba(92, 200, 255, 0.5); pointer-events: none; }
+.pane::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; border-top-left-radius: 10px; }
+.pane::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; border-bottom-right-radius: 10px; }
+.pane h2 { font: 600 12.5px var(--sans); color: var(--dim); margin: 0 0 10px; letter-spacing: 0.01em; display: flex; justify-content: space-between; gap: 12px; }
+.pane h2 span { font-weight: 400; color: var(--faint); }
+.need { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; width: 100%; text-align: left; background: none; border: 0; border-top: 1px solid var(--line); color: inherit; font: inherit; padding: 7px 4px; cursor: pointer; border-radius: 0; }
+.need:first-of-type { border-top: 0; }
+.need:hover { background: var(--raise); }
+.need .st { display: inline-flex; gap: 6px; align-items: center; min-width: 78px; font-size: 12.5px; color: var(--ink2); padding-top: 1px; }
+.need .go { color: var(--faint); font: 11.5px var(--mono); white-space: nowrap; padding-top: 2px; }
+.need b { font-weight: 600; } .need .why { display: block; color: var(--dim); font-size: 12.5px; }
+.glyph { flex: none; }
+.meters { display: grid; grid-template-columns: minmax(0, 150px) minmax(60px, 1fr) auto; gap: 9px 12px; align-items: center; }
+.meters .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink2); }
+.meters .v { font: 12px var(--mono); color: var(--ink2); white-space: nowrap; text-align: right; }
+.mtrack { position: relative; height: 8px; background: var(--track); border-radius: 4px; }
+.mtrack i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--accent); width: 0; transition: width 620ms var(--ease); }
+.mtrack i.warn { background: var(--warn); } .mtrack i.bad { background: var(--bad); }
+.mtrack u { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--fg); border-radius: 1px; } /* the limit */
+.seg { display: flex; gap: 2px; height: 14px; }
+.seg i { display: block; height: 100%; min-width: 3px; border-radius: 3px; flex: 0 0 auto; width: 0; transition: width 620ms var(--ease); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 10px; color: var(--ink2); font-size: 12.5px; }
+.legend span { display: inline-flex; gap: 7px; align-items: center; } .legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; } .legend b { font: 12px var(--mono); font-weight: 400; color: var(--fg); }
+.reads { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; }
+.read { text-align: left; background: none; border: 0; border-left: 1px solid var(--line); color: inherit; font: inherit; padding: 2px 14px 3px; cursor: pointer; }
+.read:first-child { border-left: 0; padding-left: 2px; }
+.read:hover .big { color: var(--accent); }
+.read .big { display: block; font: 300 26px/1.15 var(--disp); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; transition: color 120ms; }
+.read .lab { display: block; color: var(--dim); font-size: 12.5px; } .read .sub { display: block; color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 44px; }
+.spark i { flex: 1; min-width: 2px; background: #4d6f96; border-radius: 2px 2px 0 0; min-height: 1px; }
+.spark i.now { background: var(--accent); } .spark i:hover { background: var(--s5); }
+.axis { display: flex; justify-content: space-between; color: var(--faint); font: 11.5px var(--mono); margin-top: 5px; }
+#tip { position: fixed; z-index: 9; pointer-events: none; background: #0b0f14; border: 1px solid var(--line2); border-radius: 6px; padding: 4px 8px; font-size: 12px; color: var(--fg); white-space: nowrap; }
+::-webkit-scrollbar { width: 10px; } ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 5px; border: 2px solid transparent; background-clip: padding-box; }
+#top { -webkit-app-region: no-drag; }
+.win { display: flex; gap: 2px; margin: -4px -8px -4px 4px; }
+.win button { width: 34px; height: 28px; display: grid; place-items: center; background: none; border: 0; border-radius: 7px; color: var(--dim); cursor: pointer; transition: background 120ms, color 120ms; }
+.win button:hover { background: var(--raise2); color: var(--fg); }
+.win button.x:hover { background: #c7373a; color: #fff; }
+#boot { position: absolute; inset: 0; z-index: 20; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); align-items: center; gap: 56px; padding: 0 90px; background: rgba(6, 9, 13, 0.985); }
+#boot[hidden] { display: none; }
+#boot.out { opacity: 0; transition: opacity 360ms ease; pointer-events: none; }
+#boot .mark { display: flex; flex-direction: column; align-items: center; gap: 22px; }
+#boot svg { width: 190px; height: 190px; overflow: visible; }
+#boot svg .ring { fill: none; stroke-linecap: round; transform-origin: 512px 512px; opacity: 0; }
+#boot svg .ring.o { stroke: var(--accent); stroke-width: 54; animation: ringin 700ms var(--ease) forwards, spin 14s linear 700ms infinite; }
+#boot svg .ring.m { stroke: var(--fg); stroke-width: 24; opacity: 0; animation: ringin 700ms 180ms var(--ease) forwards, spinr 9s linear 880ms infinite; }
+#boot svg .core { fill: none; stroke: var(--accent); stroke-width: 52; opacity: 0; transform-origin: 512px 512px; animation: corein 500ms 420ms var(--ease) forwards; }
+#boot svg .pulse { stroke: var(--accent); stroke-width: 6; fill: none; opacity: 0; transform-origin: 512px 512px; animation: pulse 1100ms 900ms ease-out forwards; }
+@keyframes ringin { from { opacity: 0; transform: rotate(-120deg) scale(0.86); } to { opacity: 1; transform: rotate(0) scale(1); } }
+@keyframes corein { from { opacity: 0; transform: scale(0.3); } to { opacity: 1; transform: scale(1); } }
+@keyframes spin { to { transform: rotate(360deg); } } @keyframes spinr { to { transform: rotate(-360deg); } }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes pulse { from { opacity: 0.7; transform: scale(1); } to { opacity: 0; transform: scale(3.6); } }
+#boot .name { font: 600 30px/1 var(--disp); letter-spacing: 0.3em; margin-right: -0.3em; opacity: 0; animation: fade 400ms 700ms var(--ease) forwards; }
+#boot .tag { color: var(--dim); font-size: 13px; opacity: 0; animation: fade 400ms 900ms var(--ease) forwards; margin-top: -10px; }
+#boot pre { margin: 0; font: 12.5px/1.75 var(--mono); color: var(--ink2); white-space: pre; min-height: 330px; overflow: hidden; }
+#boot pre .k { color: var(--ok); } #boot pre .w { color: var(--warn); } #boot pre .f { color: var(--bad); } #boot pre .d { color: var(--faint); } #boot pre .a { color: var(--accent); }
+#boot .skip { position: absolute; right: 22px; bottom: 14px; color: var(--faint); font-size: 12px; }
+/* ---- git ---- */
+#view.fill { padding: 0; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.ghead { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 14px 22px 0; }
+.ghead h1 { margin: 0; } .ghead .br { font: 12.5px var(--mono); color: var(--ink2); } .ghead .live { margin-left: auto; color: var(--dim); font-size: 12.5px; display: inline-flex; gap: 7px; align-items: center; }
+.ghead .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); display: inline-block; } .ghead .live i.busy { background: var(--warn); }
+.gsub { display: flex; gap: 18px; padding: 8px 22px 0; border-bottom: 1px solid var(--line); grid-column: 1 / -1; width: 100%; }
+.gsub button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--dim); font: inherit; padding: 4px 0 8px; cursor: pointer; } .gsub button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); } .gsub button span { color: var(--faint); font: 11.5px var(--mono); margin-left: 5px; }
+.gbody { min-height: 0; display: grid; grid-template-columns: 400px minmax(0, 1fr); }
+.glist { overflow-y: auto; border-right: 1px solid var(--line); padding: 6px 8px 14px; } .gview { overflow: auto; padding: 14px 0 20px; min-width: 0; }
+.grow { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 4px 10px; border-radius: 7px; cursor: pointer; }
+.grow:hover { background: var(--raise); } .grow[aria-selected="true"] { background: var(--sel); }
+.grow .l { font: 12px var(--mono); color: var(--dim); } .grow .l.M { color: var(--warn); } .grow .l.A, .grow .l.N { color: var(--ok); } .grow .l.D { color: var(--bad); } .grow .l.R { color: var(--accent); }
+.grow .p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; } .grow .p bdi { direction: ltr; } .grow .p .d { color: var(--dim); }
+.grow .c { font: 11.5px var(--mono); color: var(--dim); white-space: nowrap; } .grow .c .a { color: var(--ok); } .grow .c .r { color: var(--bad); }
+.crow { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 6px 10px 6px 34px; border-radius: 7px; cursor: pointer; }
+.crow:hover { background: var(--raise); } .crow[aria-selected="true"] { background: var(--sel); }
+.crow .t { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .crow .s { display: block; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .crow .s code { background: none; padding: 0; color: var(--ink2); }
+.trow { display: flex; gap: 6px; align-items: baseline; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 3px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; } .trow:hover { background: var(--raise); } .trow[aria-selected="true"] { background: var(--sel); } .trow .tw { width: 10px; color: var(--faint); font: 11px var(--mono); } .trow.dir { color: var(--ink2); } .trow .l { font: 11.5px var(--mono); margin-left: auto; padding-left: 10px; }
+.gview .pad { padding: 0 22px; }
+.diff { font: 12.5px/1.55 var(--mono); min-width: max-content; }
+.diff .f { position: sticky; top: -14px; background: #10151c; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 5px 22px; color: var(--fg); font-weight: 600; margin-top: 10px; z-index: 1; }
+.diff .h { color: var(--accent); background: rgba(92, 200, 255, 0.07); padding: 1px 22px; }
+.diff .ln { display: grid; grid-template-columns: 46px 46px 16px minmax(0, 1fr); } .diff .ln > span { white-space: pre; } .diff .ln .n { color: var(--faint); text-align: right; padding-right: 10px; user-select: none; }
+.diff .ln.a { background: rgba(47, 182, 90, 0.14); } .diff .ln.d { background: rgba(240, 96, 95, 0.14); } .diff .ln.a .s { color: var(--ok); } .diff .ln.d .s { color: var(--bad); }
+.sb { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; font: 700 10px var(--mono); color: #06110a; background: var(--dim); }
+.sb.M { background: #f0b429; } .sb.A, .sb.N { background: #3ecf72; } .sb.D { background: #f0605f; color: #fff; } .sb.R { background: #5cc8ff; } .sb.U { background: #d55181; color: #fff; }
+.fd { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 7px; flex: none; vertical-align: 1px; }
+.stat { display: inline-flex; gap: 1.5px; margin-left: 8px; vertical-align: -1px; } .stat i { width: 6px; height: 9px; border-radius: 1.5px; background: var(--track); display: block; } .stat i.a { background: #3ecf72; } .stat i.r { background: #f0605f; }
+.gsum { display: flex; gap: 14px; align-items: center; padding: 0 22px 2px; color: var(--dim); font-size: 12.5px; }
+.gsum .bar { display: flex; gap: 2px; width: 220px; height: 6px; } .gsum .bar i { display: block; height: 100%; border-radius: 3px; } .gsum .bar .a { background: #3ecf72; } .gsum .bar .r { background: #f0605f; }
+.gsum b { font: 12px var(--mono); font-weight: 400; } .gsum .pa { color: #3ecf72; } .gsum .pr { color: #f0605f; }
+.chip { display: inline-flex; gap: 6px; align-items: center; font: 12.5px var(--mono); color: var(--fg); background: rgba(92, 200, 255, 0.1); border: 1px solid rgba(92, 200, 255, 0.28); border-radius: 6px; padding: 1px 8px; }
+.chip svg { color: var(--accent); } .up { color: #f0b429; font: 12.5px var(--mono); } .down { color: #5cc8ff; font: 12.5px var(--mono); } .even { color: #3ecf72; }
+.day { color: var(--faint); font-size: 12px; padding: 12px 10px 4px 34px; }
+.crow { position: relative; padding-left: 34px; }
+.crow::before { content: ""; position: absolute; left: 17px; top: 0; bottom: 0; width: 1px; background: var(--line2); }
+.crow .dot { position: absolute; left: 12px; top: 12px; width: 11px; height: 11px; border-radius: 50%; background: var(--tc, var(--dim)); border: 2px solid #12161c; box-shadow: 0 0 0 1px var(--tc, var(--dim)); }
+.crow.un .dot { background: #12161c; }
+.crow .ty { color: var(--tc, var(--dim)); font-weight: 600; }
+.t-feat { --tc: #3ecf72; } .t-fix { --tc: #f0605f; } .t-chore { --tc: #8a92a0; } .t-docs { --tc: #5b9cf0; } .t-refactor { --tc: #a78bfa; } .t-perf { --tc: #f59e5b; } .t-test { --tc: #2fc4b2; } .t-style { --tc: #e879a8; } .t-build, .t-ci { --tc: #f0b429; }
+.who { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; font: 700 9px var(--sans); color: #071018; margin-right: 5px; vertical-align: -3px; }
+.trow .ic { width: 14px; display: inline-grid; place-items: center; color: #6fb3d9; flex: none; }
+.diff .ln.a .w { background: rgba(62, 207, 114, 0.38); border-radius: 2px; } .diff .ln.d .w { background: rgba(240, 96, 95, 0.42); border-radius: 2px; }
+.diff .ln.a { background: rgba(62, 207, 114, 0.11); box-shadow: inset 3px 0 0 #3ecf72; } .diff .ln.d { background: rgba(240, 96, 95, 0.11); box-shadow: inset 3px 0 0 #f0605f; }
+.diff .f { display: flex; align-items: center; gap: 2px; } .diff .f .cnt { margin-left: auto; font-weight: 400; font-size: 12px; } .diff .f .cnt .pa { color: #3ecf72; } .diff .f .cnt .pr { color: #f0605f; }
+.diff .h { color: #9ad8ff; }
+.diff .k { color: #c4a7ff; } .diff .st { color: #8fdcae; } .diff .nu { color: #f5b06b; } .diff .cm { color: #6d7684; font-style: italic; } .diff .fn { color: #82b8ff; } .diff .tg { color: #ff8fa3; } .diff .pr { color: #7fd6e8; } .diff .hd { color: #82b8ff; font-weight: 600; }
+.crow .s .pr { color: #7fd6e8; }
+/* ---- the console: every session in every project, as tabs and as tiles ---- */
+#claude { display: none; min-height: 0; }
+#body.claude { grid-template-columns: minmax(0, 1fr); } #body.claude #list, #body.claude #view { display: none; }
+#body.claude #claude { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.km { display: inline-grid; place-items: center; min-width: 20px; height: 18px; padding: 0 4px; border-radius: 5px; font: 700 10.5px var(--mono); color: #071018; background: #d9a36a; flex: none; } .km.ubuntu { background: #f08b4a; } .km.powershell { background: #5b9cf0; }
+.cdock { display: grid; gap: 7px; padding: 8px 12px 7px; border-bottom: 1px solid var(--line); min-width: 0; }
+.cdock .tabs { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; } .cdock .tabs::-webkit-scrollbar { display: none; }
+.stab { flex: 1 1 0; min-width: 170px; max-width: 320px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 8px; align-items: center; background: var(--raise); border: 1px solid var(--line); border-left: 3px solid #46505e; border-radius: 8px; color: var(--ink2); font: inherit; font-size: 12.5px; padding: 5px 6px 5px 8px; cursor: pointer; text-align: left; position: relative; }
+.stab:hover { border-color: var(--line2); border-left-color: inherit; } .stab.on { background: var(--sel); border-color: rgba(92, 200, 255, 0.45); color: var(--fg); }
+.stab.working { border-left-color: var(--accent); } .stab.finished { border-left-color: var(--ok); } .stab.needs { border-left-color: var(--warn); } .stab.new { border-left-color: var(--ink2); } .stab.ended { border-left-color: transparent; opacity: 0.7; }
+.stab .num { font: 10.5px var(--mono); color: var(--faint); } .stab .tx { min-width: 0; display: grid; gap: 1px; }
+.stab .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-weight: 600; }
+.stab .n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--dim); font-size: 12px; } .stab .n .w { color: var(--ink2); } .stab.working .n .w { color: var(--accent); } .stab.finished .n .w { color: var(--ok); } .stab.needs .n .w { color: var(--warn); }
+.stab .tc { display: grid; place-items: center; min-width: 20px; height: 20px; border-radius: 5px; color: var(--faint); font-size: 12px; padding: 0 4px; } .stab .tc:hover { background: #c7373a; color: #fff; } .stab .tc.sure { background: #c7373a; color: #fff; font-weight: 600; }
+.sd { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.sd.working { background: var(--accent); animation: pulse2 1s ease-in-out infinite; } .sd.finished { background: var(--ok); box-shadow: 0 0 0 3px rgba(62, 207, 114, 0.22); } .sd.needs { background: var(--warn); box-shadow: 0 0 0 3px rgba(250, 178, 25, 0.25); } .sd.new { background: var(--ink2); } .sd.idle { background: #46505e; } .sd.ended { background: none; border: 1px solid var(--faint); }
+@keyframes pulse2 { 50% { opacity: 0.35; } }
+.cdock .dr { display: flex; gap: 6px; align-items: center; } .cdock .dr .gap { margin-left: auto; } .cdock .dr .act { padding: 3px 9px; display: inline-flex; gap: 6px; align-items: center; } .cdock select.in { max-width: 130px; }
+.lay { display: inline-flex; border: 1px solid var(--line2); border-radius: 7px; overflow: hidden; } .lay button { background: none; border: 0; color: var(--dim); font: 11.5px var(--mono); padding: 3px 8px; cursor: pointer; } .lay button + button { border-left: 1px solid var(--line2); } .lay button[aria-pressed="true"] { background: var(--sel); color: var(--fg); }
+.cstage { position: relative; min-height: 0; }
+.cgrid { position: absolute; inset: 0; display: grid; gap: 1px; background: var(--line); }
+.tile { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #0e1217; position: relative; } .tile[hidden] { display: none; }
+.tile.on::before { content: ""; position: absolute; inset: 0 0 auto; height: 2px; background: var(--accent); z-index: 2; }
+.thead { display: flex; gap: 8px; align-items: center; padding: 5px 8px 5px 10px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 12.5px; min-width: 0; cursor: default; }
+.thead b { color: var(--fg); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .thead .w { white-space: nowrap; } .thead .sp { margin-left: auto; display: flex; gap: 2px; flex: none; }
+.thead .ib { width: 26px; height: 22px; display: grid; place-items: center; background: none; border: 0; border-radius: 6px; color: var(--dim); cursor: pointer; } .thead .ib:hover { background: var(--raise2); color: var(--fg); } .thead .ib.x:hover { background: #c7373a; color: #fff; }
+.tbody { position: relative; min-height: 0; } .term { position: absolute; inset: 0; padding: 8px 4px 6px 12px; }
+.xterm .xterm-viewport { background: transparent !important; } .xterm .xterm-viewport::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); }
+.claunch { position: absolute; inset: 0; z-index: 30; background: #0d1116; overflow-y: auto; padding: 28px 36px 30px; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 48px; align-content: start; } .claunch[hidden] { display: none; }
+.cgrid[hidden] { display: none; }
+.claunch h1 select.in { font: inherit; font-size: 19px; font-weight: 600; padding: 1px 6px; margin-left: 2px; }
+.keys { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; color: var(--dim); font-size: 12.5px; align-items: baseline; } .keys span:nth-child(odd) { white-space: nowrap; }
+@media (max-width: 980px) { .claunch { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
+.claunch h1 { font: 600 21px/1.25 var(--disp); letter-spacing: -0.015em; margin: 0 0 6px; } .claunch p { color: var(--dim); margin: 0 0 14px; max-width: 62ch; }
+.claunch textarea { height: 120px; min-height: 0; font: 14px/1.55 var(--sans); padding: 13px 15px; } .claunch .row { margin-top: 12px; } .claunch .row .act { display: inline-flex; gap: 8px; align-items: center; padding: 5px 12px; }
+.claunch h2 { font: 600 12.5px var(--sans); color: var(--dim); margin: 22px 0 6px; } .claunch .col > h2:first-child { margin-top: 4px; }
+.claunch .facts { margin-top: 22px; color: var(--dim); font-size: 12.5px; display: grid; gap: 5px; }
+.matrix { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 6px 6px; align-items: center; max-width: 520px; } .matrix .n { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .matrix .act { padding: 3px 9px; display: inline-flex; gap: 6px; align-items: center; }
+.sess { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 6px 8px; border-radius: 7px; cursor: pointer; } .sess:hover { background: var(--raise); }
+.sess .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; } .sess .s { display: block; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .sess .x { color: var(--faint); border-radius: 5px; padding: 0 5px; } .sess .x:hover { color: #fff; background: #c7373a; }
+.old { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 5px 8px; border-radius: 7px; cursor: pointer; } .old:hover { background: var(--raise); } .old .t { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink2); } .old .s { display: block; color: var(--faint); font-size: 12px; }
+.cover { position: absolute; inset: 0; overflow-y: auto; padding: 16px 18px 22px; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; align-content: start; background: rgba(11, 14, 19, 0.6); } .cover[hidden] { display: none; }
+.agent { text-align: left; background: #10141a; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 11px; color: inherit; font: inherit; cursor: pointer; display: grid; gap: 8px; min-width: 0; position: relative; }
+.agent:hover { border-color: var(--line2); } .agent.needs { border-color: rgba(250, 178, 25, 0.6); } .agent.finished { border-color: rgba(62, 207, 114, 0.5); } .agent.working { border-color: rgba(92, 200, 255, 0.32); }
+.agent .top { display: flex; gap: 8px; align-items: center; min-width: 0; } .agent .top b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .agent .top .num { font: 10.5px var(--mono); color: var(--faint); } .agent .top .pj { margin-left: auto; color: var(--dim); font-size: 12.5px; white-space: nowrap; }
+.agent .st { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink2); } .agent .st .ago { margin-left: auto; color: var(--faint); font: 11.5px var(--mono); }
+.agent .asked { color: var(--dim); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.agent .now { color: var(--fg); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 19px; } .agent .now.dim { color: var(--dim); }
+.agent pre { margin: 0; font: 11px/1.45 var(--mono); color: #8d95a2; white-space: pre; overflow: hidden; height: 97px; background: rgba(0, 0, 0, 0.28); border-radius: 6px; padding: 6px 8px; }
+.agent .ft { display: flex; gap: 6px; } .agent .ft .act { padding: 2px 9px; }
+.cover .empty { grid-column: 1 / -1; color: var(--dim); padding: 30px 6px; }
+.ag { display: grid; grid-template-columns: auto auto minmax(0, 190px) auto minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; text-align: left; background: none; border: 0; border-top: 1px solid var(--line); color: inherit; font: inherit; padding: 7px 4px; cursor: pointer; } .ag:first-of-type { border-top: 0; } .ag:hover { background: var(--raise); }
+.ag b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ag .pj { color: var(--dim); white-space: nowrap; } .ag .nw { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ag .wd { color: var(--dim); font-size: 12.5px; white-space: nowrap; }
+body.pop { background: #0b0e13; } body.pop #panel { display: none; } .popterm { position: absolute; inset: 0; padding: 8px 4px 6px 12px; }
+@media (prefers-reduced-motion: reduce) { #boot { display: none; } #panel.in, #view > * { animation: none; } .mtrack i, .seg i { transition: none; } }
+</style>
+</head>
+<body>
+<div id="panel" class="in">
+  <div id="boot" hidden><div class="mark"><svg viewBox="0 0 1024 1024" aria-hidden="true"><circle class="ring o" cx="512" cy="512" r="340" pathLength="360" stroke-dasharray="270 90"/><circle class="ring m" cx="512" cy="512" r="232" pathLength="360" stroke-dasharray="100 30 100 30 70 30"/><circle class="core" cx="512" cy="512" r="66"/><circle class="pulse" cx="512" cy="512" r="120"/></svg><div class="name">MAESTRO</div><div class="tag">your agents, in concert</div></div><pre id="bootlog" aria-hidden="true"></pre><span class="skip">any key skips</span></div>
+  <div id="top" data-tauri-drag-region><svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.25" stroke="currentColor" stroke-width="1.5"/><path d="M12 12l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><b id="vtitle"></b><input id="q" placeholder="Search memories, rules and work" autocomplete="off" spellcheck="false" aria-label="Search"><span id="proj"></span><span class="win"><button data-pin title="Keep Maestro above other windows" aria-label="Keep Maestro above other windows" aria-pressed="false"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.2 1.5h3.6l-.5 3.2 1.9 1.9H2.8l1.9-1.9zM6 6.6v4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button data-max title="Maximize or restore" aria-label="Maximize or restore"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button><button data-min title="Minimize" aria-label="Minimize"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button><button class="x" data-quit title="Close Maestro (Esc only hides it)" aria-label="Close Maestro"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7m0-7l-7 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span></div>
+  <div id="tabsrow"><div id="tabs" role="tablist"></div><button id="popview" data-popview title="Open this view in a window of its own" aria-label="Open this view in a window of its own"><svg width="13" height="13" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M5 2H2.5A.5.5 0 002 2.5v7a.5.5 0 00.5.5h7a.5.5 0 00.5-.5V7M7 2h3v3M10 2L5.5 6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Own window</span></button></div>
+  <div id="body" class="home"><div id="list"></div><div id="view"></div><div id="claude"><div class="cdock"></div><div class="cstage"><div class="cgrid"></div><div class="cover" hidden></div><div class="claunch" hidden></div></div></div></div>
+  <div id="foot"><span><kbd>↑</kbd> <kbd>↓</kbd> move</span><span><kbd>Tab</kbd> switch</span><span><kbd>&gt;</kbd> actions</span><span><kbd>Ctrl</kbd> <kbd>E</kbd> edit</span><span><kbd>Ctrl</kbd> <kbd>N</kbd> new</span><span><kbd>Esc</kbd> hide</span><span id="hk"></span><span class="msg" id="msg"></span></div>
+</div>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script>
+const T = window.__TAURI__;
+// anything that goes wrong is written to maestro.log, and the intro can never be what is left on screen
+const trouble = (what) => { try { T.core.invoke('note', { text: String(what) }); } catch (_) {} const b = document.getElementById('boot'); if (b) b.hidden = true; };
+addEventListener('error', (e) => trouble(`${e.message} @ ${e.lineno}:${e.colno}`));
+addEventListener('unhandledrejection', (e) => trouble(`rejected: ${e.reason && (e.reason.stack || e.reason.message) || e.reason}`));
+// one small tooltip for every mark that carries data-tip
+document.addEventListener('mousemove', (e) => { const m = e.target.closest && e.target.closest('[data-tip]'); let tip = document.getElementById('tip'); if (!m) { if (tip) tip.hidden = true; return; } if (!tip) { tip = document.createElement('div'); tip.id = 'tip'; document.body.appendChild(tip); } tip.textContent = m.dataset.tip; tip.hidden = false; const w = tip.offsetWidth; tip.style.left = Math.max(8, Math.min(innerWidth - w - 8, e.clientX + 12)) + 'px'; tip.style.top = (e.clientY + 16) + 'px'; });
+const invoke = (c, a) => T.core.invoke(c, a);
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const num = (n) => Number(n || 0).toLocaleString();
+const kk = (n) => n >= 1000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'k' : String(n);
+const ALL_TABS = [['all', 'All'], ['claude', 'Console'], ['memory', 'Memory'], ['skill', 'Skills'], ['rule', 'Rules'], ['audit', 'Audits'], ['work', 'Work'], ['git', 'Git'], ['ship', 'Ship'], ['sessions', 'Sessions'], ['checks', 'Checks'], ['hooks', 'Hooks']];
+let TABS = ALL_TABS;
+// a tab is shown when the project has something for it: a ledger, registered checks, session drafts, audits or a log are not in every harness
+const FITS = { ship: () => D.ledger.total > 0 || D.project.kit, checks: () => (D.registry || []).length > 0 || !!D.probes, sessions: () => D.sessions.drafts > 0, audit: () => (D.audits || []).length > 0, work: () => D.log.length > 0 };
+function fitTabs() { TABS = D.empty ? [] : ALL_TABS.filter(([k]) => !FITS[k] || FITS[k]() || k === tab); }
+const PAGES = { claude: drawClaude, git: drawGit, ship: drawShip, sessions: drawSessions, checks: drawChecks, hooks: drawHooks, projects: drawProjectsPage, setup: drawSetup };
+const keyOf = (h) => h.kind === 'action' ? 'x:' + h.title : h.kind === 'memory' ? 'm:' + h.m.f : h.kind === 'skill' ? `s:${h.sk.scope}/${h.sk.name}` : h.kind === 'rule' ? 'r:' + JSON.stringify(h.ref) : h.kind === 'audit' ? 'a:' + (h.a.path || h.a.slug) : 'w:' + h.e.slug;
+const HINT = { all: 'Search everything, or type > for actions', memory: 'Search memories', skill: 'Search skills', audit: 'Search audits', hooks: 'Filter the hooks', claude: 'Type > for actions', git: 'Filter files or commits', projects: 'Projects', setup: 'Set up a harness', rule: 'Search rules', work: 'Search the work log', ship: 'Filter the open rows', sessions: 'Sessions', checks: 'Filter the probes' };
+let LEDGER = null, AUDIT = null, PROJ = { names: [], current: 0 };
+const openRows = () => { const st = D.ledger.status || {}; return D.ledger.total - ['shipped', 'verified', 'superseded', 'n/a'].reduce((n, k) => n + (st[k] || 0), 0); };
+let D = null, ITEMS = [], tab = 'all', hits = [], sel = 0, editing = null;
+const say = (t, cls = '') => { const m = $('#msg'); m.textContent = t; m.className = 'msg ' + cls; clearTimeout(say.t); say.t = setTimeout(() => { m.textContent = ''; }, 5000); };
+function globToRe(g) { let re = ''; for (let i = 0; i < g.length; i++) { const c = g[i]; if (c === '*') { if (g[i + 1] === '*') { re += '.*'; i++; if (g[i + 1] === '/') i++; } else re += '[^/]*'; } else if (c === '?') re += '[^/]'; else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&'); } return new RegExp('^' + re + '$'); }
+const loadFor = (file) => { let total = D.sizes.projClaude + D.sizes.userClaude; const from = []; for (const r of D.rules) { if (!r.globs.length || r.globs.some((g) => globToRe(g).test(file))) { total += r.chars; from.push(r); } } return { file, total, over: total > D.limit, from }; };
+const plain = (s) => s.replace(/\*\*/g, '').replace(/`/g, '');
+
+function build() {
+  ITEMS = [];
+  for (const m of D.memories) ITEMS.push({ kind: 'memory', title: m.name, sub: m.desc || m.type, text: m.body, m });
+  for (const k of D.skills || []) ITEMS.push({ kind: 'skill', title: '/' + k.name, sub: k.desc, text: k.body, sk: k });
+  for (const a of D.audits || []) ITEMS.push({ kind: 'audit', title: a.title, sub: `${a.date} · ${a.where}${a.kind === 'doc' && a.file !== a.title ? ' · ' + a.file : ''}`, text: a.lead || '', a });
+  for (const r of D.rules) r.sections.forEach((s, si) => s.laws.forEach((law, li) => ITEMS.push({ kind: 'rule', title: plain(law.slice(2, 130)), sub: `${r.f.replace(/\.md$/, '')} › ${s.head.replace(/\s*\(log:.*$/, '')}`, text: law, ref: { f: r.f, s: si, i: li } })));
+  for (const e of D.log) ITEMS.push({ kind: 'work', title: e.title, sub: `${e.date}${(e.tags || []).length ? ' · ' + e.tags.join(', ') : ''}${e.pending ? ' · deploy pending' : ''}`, text: '', e });
+  for (const it of ITEMS) { it.ht = it.title.toLowerCase(); it.hs = (it.sub || '').toLowerCase(); it.hx = (it.text || '').toLowerCase(); }
+}
+function search() {
+  const q = $('#q').value.trim().toLowerCase(); const toks = q.split(/\s+/).filter(Boolean);
+  let pool = tab === 'all' ? ITEMS : ITEMS.filter((it) => it.kind === tab);
+  if (q.startsWith('>')) { const want = q.slice(1).trim().split(/\s+/).filter(Boolean); hits = actions().filter((a) => want.every((t) => (a.title + ' ' + a.sub).toLowerCase().includes(t))); return; }
+  if (PAGES[tab]) { hits = []; return; }
+  if (!toks.length) { hits = tab === 'all' ? [] : pool.slice(0, 400); return; }
+  const out = [];
+  for (const it of pool) { let score = 0, ok = true; for (const t of toks) { const a = it.ht.includes(t), b = it.hs.includes(t), c = it.hx.includes(t); if (!a && !b && !c) { ok = false; break; } score += (a ? 6 : 0) + (b ? 3 : 0) + (c ? 1 : 0); } if (ok) out.push([score + (it.kind === 'memory' ? 2 : 0), it]); }
+  out.sort((x, y) => y[0] - x[0]); hits = out.slice(0, 200).map((x) => x[1]);
+  if (tab === 'all') { const order = ['memory', 'skill', 'rule', 'audit', 'work']; hits = order.flatMap((k) => hits.filter((h) => h.kind === k).slice(0, 40)); } // kinds stay together, best first inside each
+}
+const KIND = { memory: 'Memory', skill: 'Skills', rule: 'Rules', audit: 'Audits', work: 'Work', action: 'Actions' };
+function drawTabs() { const n = { all: ITEMS.length, memory: D.memories.length, rule: ITEMS.filter((i) => i.kind === 'rule').length, work: D.log.length, ship: openRows(), sessions: D.sessions.live, checks: (D.registry || []).length, claude: CC.list.filter((x) => x.live).length || '', git: G.status ? G.status.total : '', skill: (D.skills || []).length, audit: (D.audits || []).length, hooks: (D.hooks || []).length }; $('#tabs').innerHTML = TABS.map(([k, t]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${t}<span>${n[k] === '' ? '' : num(n[k])}</span></button>`).join(''); }
+function drawList() {
+  const cmd = $('#q').value.trimStart().startsWith('>');
+  const home = tab === 'all' && !$('#q').value.trim(); $('#body').classList.toggle('home', !cmd && (home || !!PAGES[tab])); $('#q').placeholder = HINT[tab];
+  $('#view').classList.toggle('fill', tab === 'git' && !cmd); $('#body').classList.toggle('claude', tab === 'claude' && !cmd);
+  if (PAGES[tab] && !cmd) { editing = null; return PAGES[tab](); }
+  if (home) return drawHome();
+  let last = null; const parts = [];
+  if (tab === 'memory' || tab === 'skill') parts.push(`<button class="item new" data-new="${tab}"><span class="t">New ${tab === 'memory' ? 'memory' : 'skill'}…</span><span class="s">Ctrl N</span></button>`);
+  hits.forEach((it, i) => { if ((tab === 'all' || it.kind === 'action') && it.kind !== last) { parts.push(`<div class="group">${KIND[it.kind]}</div>`); last = it.kind; } parts.push(`<button class="item" data-i="${i}" aria-selected="${i === sel}"><span class="t">${esc(it.title)}</span><span class="s">${esc(it.sub)}</span></button>`); });
+  $('#list').innerHTML = parts.join('') || `<div class="group">Nothing matches.</div>`;
+  drawView();
+}
+function rich(text) {
+  let h = esc(text).replace(/^## (.+)$/gm, '<h2>$1</h2>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  for (const t of $('#q').value.trim().toLowerCase().split(/\s+/).filter((x) => x.length > 2)) { const re = new RegExp(`(${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?![^<]*>)`, 'gi'); h = h.replace(re, '<mark>$1</mark>'); }
+  return h;
+}
+const ago = (secs) => { if (!secs) return ''; const d = Math.floor((Date.now() / 1000 - secs) / 86400); return d < 1 ? 'changed today' : d === 1 ? 'changed yesterday' : `changed ${d} days ago`; };
+async function drawView() {
+  const it = hits[sel]; const v = $('#view'); editing = null;
+  if (!it) { v.innerHTML = ''; return; }
+  if (it.kind === 'action') { v.innerHTML = `<h1>${esc(it.title)}</h1><div class="meta"><span>${esc(it.sub)}</span></div><p class="lead">Press <kbd>Enter</kbd> to do it.</p>`; return; }
+  if (it.kind === 'memory') v.innerHTML = `<h1>${esc(it.m.name)}</h1><div class="meta"><span>${esc(it.m.type || 'memory')}</span><span>${ago(it.m.modified)}</span><span>${num(it.m.chars)} characters</span><button class="act" data-edit>Edit</button><button class="act" data-ask>Ask Claude</button></div>${it.m.desc ? `<p class="dim" style="max-width:78ch;margin:0 0 14px">${esc(it.m.desc)}</p>` : ''}<div class="text">${rich(it.m.body)}</div>`;
+  if (it.kind === 'skill') v.innerHTML = `<h1>/${esc(it.sk.name)}</h1><div class="meta"><span>${it.sk.scope === 'you' ? 'yours, in every project' : 'this project only'}</span><span>${num(it.sk.chars)} characters</span><button class="act" data-edit>Edit</button></div>${it.sk.desc ? `<p class="dim" style="max-width:78ch;margin:0 0 14px">${esc(it.sk.desc)}</p>` : ''}<div class="text">${rich(it.sk.body)}</div>`;
+  if (it.kind === 'rule') { const r = D.rules.find((x) => x.f === it.ref.f); v.innerHTML = `<h1>${esc(it.sub)}</h1><div class="meta"><span>${num(it.text.length)} characters</span><span>read for ${esc(r.globs.slice(0, 2).join(', '))}${r.globs.length > 2 ? ` and ${r.globs.length - 2} more paths` : ''}</span><button class="act" data-edit>Edit</button><button class="act" data-move>Move</button><button class="act" data-retire>Retire</button><button class="act" data-ask>Ask Claude</button></div><div class="slot" id="slot"></div><div class="text">${rich(it.text.slice(2))}</div>`; }
+  if (it.kind === 'audit') { v.innerHTML = `<h1>${esc(it.title)}</h1><div class="meta"><span>${esc(it.a.date)}</span><span>${esc(it.a.where)}</span>${it.a.kind === 'doc' ? `<span>${esc(it.a.file)}</span><span>${num(it.a.chars)} characters</span>` : '<span>a log entry</span>'}</div><div class="text dim">Reading…</div>`; const want = it; const t = await (it.a.kind === 'doc' ? invoke('read_audit', { path: it.a.path }) : invoke('read_log', { slug: it.a.slug })).catch((e) => String(e)); if (hits[sel] === want) $('#view .text').outerHTML = `<div class="text">${rich(t.replace(/^---[\s\S]*?---\n/, '').replace(/^# .+\n/, ''))}</div>`; }
+  if (it.kind === 'work') { v.innerHTML = `<h1>${esc(it.title)}</h1><div class="meta"><span>${esc(it.sub)}</span></div><div class="text dim">Reading…</div>`; const want = it; const t = await invoke('read_log', { slug: it.e.slug }).catch((e) => String(e)); if (hits[sel] === want) $('#view .text').outerHTML = `<div class="text">${rich(t.replace(/^---[\s\S]*?---\n/, ''))}</div>`; }
+  v.scrollTop = 0; const cur = $(`.item[data-i="${sel}"]`); if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+const GLYPH = {
+  bad: '<svg class="glyph" width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><path d="M5.5 0.5l5 5-5 5-5-5z" fill="var(--bad)"/></svg>',
+  warn: '<svg class="glyph" width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><path d="M5.5 1l5 9h-10z" fill="var(--warn)"/></svg>',
+  ok: '<svg class="glyph" width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><circle cx="5.5" cy="5.5" r="4.5" fill="var(--ok)"/></svg>',
+};
+const STAGES = [['uncommitted', 'Not committed', '--s1'], ['committed', 'Committed', '--s2'], ['pushed', 'Pushed', '--s3'], ['deployed', 'On the box', '--s4'], ['closed', 'Confirmed', '--s5']];
+let booting = null;
+function boot(force) {
+  const el = $('#boot'); if (!el || D.empty || (!force && (localStorage.getItem('intro') === 'off' || matchMedia('(prefers-reduced-motion: reduce)').matches))) return;
+  const L = D.ledger, st = L.status || {}, closed = ['shipped', 'verified', 'superseded', 'n/a'].reduce((n, k) => n + (st[k] || 0), 0), open = L.total - closed;
+  const hot = (D.hot || []).map(loadFor).sort((a, b) => b.total - a.total)[0], P = D.probes;
+  const pad = (s, n) => String(s).padEnd(n);
+  const line = (lvl, what, val) => `<span class="${lvl === 'ok' ? 'k' : lvl === 'warn' ? 'w' : 'f'}">[ ${lvl === 'ok' ? ' OK ' : lvl === 'warn' ? 'WARN' : 'FAIL'} ]</span> ${pad(what, 14)}<span class="d">${esc(val)}</span>`;
+  const lines = [
+    `<span class="a">maestro</span> <span class="d">0.1 · ${esc(D.project.root)}</span>`,
+    line('ok', 'project', D.project.name),
+    line(D.sizes.projClaude ? 'ok' : 'warn', 'instructions', `${D.project.instructions} ${num(D.sizes.projClaude)} · yours ${num(D.sizes.userClaude)}`),
+    line('ok', 'memory', `${D.memories.length} files · index ${num(D.sizes.memoryIndex)}`),
+    line('ok', 'skills', `${(D.skills || []).length} loaded`),
+    line('ok', 'rules', `${num(ITEMS.filter((i) => i.kind === 'rule').length)} in ${D.rules.length} files`),
+    line('ok', 'hooks', `${(D.hooks || []).length} armed`),
+    (D.audits || []).length ? line('ok', 'audits', `${D.audits.length} on file`) : null,
+    D.log.length ? line('ok', 'work log', `${num(D.log.length)} entries`) : null,
+    hot ? line(hot.over ? 'fail' : 'ok', 'context', `${hot.file.split('/').pop()} ${kk(hot.total)} of ${kk(D.limit)}`) : null,
+    L.total ? line(open ? 'warn' : 'ok', 'ledger', `${num(open)} of ${num(L.total)} not confirmed`) : null,
+    P && P.registered ? line(P.current < P.registered ? 'warn' : 'ok', 'checks', `${P.current} of ${P.registered} current`) : null,
+    D.sessions.drafts ? line(D.sessions.live > 1 ? 'warn' : 'ok', 'sessions', `${D.sessions.live} live`) : null,
+    `<span class="a">ready.</span> <span class="d">${esc(D.hotkey || 'Ctrl+Shift+Space')} anywhere</span>`,
+  ].filter(Boolean);
+  clearTimeout(booting); el.hidden = false; el.classList.remove('out'); el.innerHTML = el.innerHTML; // restart the drawing
+  const log = $('#bootlog'); log.innerHTML = ''; let i = 0;
+  const end = () => { clearTimeout(booting); el.classList.add('out'); booting = setTimeout(() => { el.hidden = true; $('#q').focus(); }, 380); removeEventListener('keydown', skip, true); removeEventListener('mousedown', skip, true); };
+  const skip = (e) => { e.preventDefault(); e.stopPropagation(); end(); };
+  addEventListener('keydown', skip, true); addEventListener('mousedown', skip, true);
+  const step = () => { if (i < lines.length) { log.innerHTML += (i ? '\n' : '') + lines[i++]; booting = setTimeout(step, i === 1 ? 520 : 95); } else booting = setTimeout(end, 750); };
+  booting = setTimeout(step, 620);
+}
+// ---- git: what changed, what was committed, the tree. Read only, and checked again every few seconds while it is on screen. ----
+const G = { repos: null, repo: null, sub: 'changes', status: null, log: null, sel: null, commit: null, open: new Set(['']), tree: {}, timer: null, seen: true, busy: false, at: 0, sig: '' };
+const letter = (f) => f.work === '?' ? 'N' : (f.work !== '.' ? f.work : f.staged);
+const pathHtml = (p) => { const i = p.lastIndexOf('/'); return `<bdi>${fdot(p)}${i < 0 ? '' : `<span class="d">${esc(p.slice(0, i + 1))}</span>`}${esc(p.slice(i + 1))}</bdi>`; };
+const EXT = { jsx: '#4aa3ff', tsx: '#4aa3ff', ts: '#3987e5', js: '#f0c53d', mjs: '#f0c53d', cjs: '#f0c53d', json: '#e0a23b', css: '#e879a8', scss: '#e879a8', html: '#f07b4a', md: '#8fa3b8', rs: '#f08b4a', py: '#2fc4b2', sql: '#2fc4b2', sh: '#3ecf72', ps1: '#5b9cf0', yml: '#f0605f', yaml: '#f0605f', toml: '#f0605f', png: '#a78bfa', jpg: '#a78bfa', jpeg: '#a78bfa', svg: '#a78bfa', webp: '#a78bfa', dart: '#2fc4b2', lock: '#5a6270' };
+const extOf = (p) => { const n = p.split('/').pop(); const i = n.lastIndexOf('.'); return i < 0 ? '' : n.slice(i + 1).toLowerCase(); };
+const fdot = (p) => `<i class="fd" style="background:${EXT[extOf(p)] || '#5a6270'}"></i>`;
+const stat = (a, d) => { a = Number(a) || 0; d = Number(d) || 0; const t = a + d; if (!t) return ''; let g = Math.round(a / t * 5); if (a && !g) g = 1; if (d && g === 5) g = 4; return `<span class="stat" title="${a} added, ${d} removed">${[0, 1, 2, 3, 4].map((i) => `<i class="${i < g ? 'a' : 'r'}"></i>`).join('')}</span>`; };
+const KW = { code: 'const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|import|from|export|default|async|await|try|catch|finally|throw|typeof|instanceof|in|of|null|undefined|true|false|this|super|yield|static|get|set|void|delete', rs: 'fn|let|mut|pub|use|mod|struct|enum|impl|trait|for|in|if|else|match|return|while|loop|break|continue|const|static|ref|move|async|await|where|as|crate|self|Self|true|false|Some|None|Ok|Err|unsafe|dyn|type', py: 'def|class|return|if|elif|else|for|while|in|not|and|or|import|from|as|try|except|finally|raise|with|lambda|None|True|False|pass|yield|async|await|global|is', sql: 'SELECT|FROM|WHERE|AND|OR|NOT|NULL|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|ALTER|ADD|COLUMN|INDEX|JOIN|LEFT|RIGHT|INNER|ON|AS|GROUP|BY|ORDER|LIMIT|IF|EXISTS|DEFAULT|PRIMARY|KEY|ENUM|INT|VARCHAR|TEXT|DATETIME|DECIMAL|UNIQUE|DROP|select|from|where|and|or|not|null|insert|into|values|update|set|delete|create|table|alter|add|join|left|on|as|group|by|order|limit', sh: 'if|then|else|elif|fi|for|in|do|done|while|case|esac|function|return|exit|echo|export|local|cd|param' };
+const HLRE = {};
+function hlre(ext) {
+  const fam = ['rs'].includes(ext) ? 'rs' : ext === 'py' ? 'py' : ext === 'sql' ? 'sql' : ['sh', 'ps1', 'yml', 'yaml', 'toml'].includes(ext) ? 'sh' : 'code';
+  if (HLRE[fam]) return HLRE[fam];
+  const cm = fam === 'py' || fam === 'sh' ? '#.*$' : fam === 'sql' ? '--.*$' : '\\/\\/.*$|\\/\\*.*?\\*\\/|^\\s*\\*.*$|\\{\\/\\*.*?\\*\\/\\}';
+  return (HLRE[fam] = new RegExp(`(${cm})|("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\`(?:[^\`\\\\]|\\\\.)*\`)|(\\b\\d[\\d_.]*(?:px|em|rem|%|ms|s)?\\b)|(\\b(?:${KW[fam]})\\b)|(<\\/?[A-Za-z][\\w.]*|\\/>)|([A-Za-z_$][\\w$]*)(?=\\s*\\()|([A-Za-z_$][\\w$-]*)(?=\\s*[:=](?!=))`, 'g'));
+}
+function hl(code, ext) {
+  if (!code) return '';
+  if (code.length > 600) return esc(code);
+  if (ext === 'md') { if (/^\s*#{1,6} /.test(code)) return `<span class="hd">${esc(code)}</span>`; return esc(code).replace(/`([^`]+)`/g, '<span class="st">`$1`</span>').replace(/\*\*([^*]+)\*\*/g, '<span class="k">**$1**</span>').replace(/^(\s*[-*] )/, '<span class="pr">$1</span>'); }
+  if (!ext || ['txt', 'lock', 'csv', 'svg'].includes(ext)) return esc(code);
+  const re = hlre(ext); re.lastIndex = 0; let out = '', last = 0, m;
+  while ((m = re.exec(code))) { out += esc(code.slice(last, m.index)); const c = m[1] ? 'cm' : m[2] ? 'st' : m[3] ? 'nu' : m[4] ? 'k' : m[5] ? 'tg' : m[6] ? 'fn' : 'pr'; out += `<span class="${c}">${esc(m[0])}</span>`; last = m.index + m[0].length; if (!m[0].length) re.lastIndex++; }
+  return out + esc(code.slice(last));
+}
+// the part of a changed line that actually differs from its partner, marked inside the line
+function inner(a, b, ext) {
+  let p = 0; const max = Math.min(a.length, b.length); while (p < max && a[p] === b[p]) p++;
+  let q = 0; while (q < max - p && a[a.length - 1 - q] === b[b.length - 1 - q]) q++;
+  const mid = (x) => x.slice(p, x.length - q);
+  if ((!mid(a) && !mid(b)) || p + q < 4 || Math.max(mid(a).length, mid(b).length) > Math.max(a.length, b.length) * 0.7) return null;
+  const mk = (x) => `${hl(x.slice(0, p), ext)}<span class="w">${esc(mid(x))}</span>${hl(x.slice(x.length - q), ext)}`;
+  return [mk(a), mk(b)];
+}
+function diffHtml(text, cut, path) {
+  if (!text.trim()) return '<p class="pad dim">No differences to show (the file may be binary, empty, or only its mode changed).</p>';
+  const rows = []; let o = 0, n = 0, inHunk = false, ext = extOf(path || ''), file = null;
+  for (const ln of text.split('\n')) {
+    if (ln.startsWith('diff --git')) { inHunk = false; const m = ln.match(/ b\/(.+)$/); file = { t: 'f', path: m ? m[1] : ln, a: 0, d: 0 }; ext = extOf(file.path); rows.push(file); continue; }
+    if (ln.startsWith('@@')) { const m = ln.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)[^@]*@@(.*)$/); if (m) { o = Number(m[1]); n = Number(m[2]); } inHunk = true; rows.push({ t: 'h', text: ln, ctx: m ? m[3] : '', ext }); continue; }
+    if (!inHunk) { if (/^(Binary|rename |new file|deleted file)/.test(ln)) rows.push({ t: 'h', text: ln, ctx: '', ext, plain: true }); continue; }
+    const c = ln[0], body = ln.slice(1);
+    if (c === '+') { rows.push({ t: 'a', n: n++, text: body, ext }); if (file) file.a++; }
+    else if (c === '-') { rows.push({ t: 'd', o: o++, text: body, ext }); if (file) file.d++; }
+    else if (c === '\\') rows.push({ t: 'm', text: ln });
+    else rows.push({ t: 'c', o: o++, n: n++, text: body, ext });
+    if (rows.length > 4000) { cut = true; break; }
+  }
+  // pair a run of removed lines with the added lines that follow it, line for line
+  for (let i = 0; i < rows.length; i++) { if (rows[i].t !== 'd') continue; let j = i; while (j < rows.length && rows[j].t === 'd') j++; let k = j; while (k < rows.length && rows[k].t === 'a') k++; const nd = j - i, na = k - j; if (nd === na && nd <= 40) for (let x = 0; x < nd; x++) { const r = inner(rows[i + x].text, rows[j + x].text, rows[i + x].ext); if (r) { rows[i + x].html = r[0]; rows[j + x].html = r[1]; } } i = k - 1; }
+  const out = rows.map((r) => r.t === 'f' ? `<div class="f">${fdot(r.path)}${esc(r.path)}<span class="cnt"><span class="pa">+${r.a}</span> <span class="pr">−${r.d}</span>${stat(r.a, r.d)}</span></div>`
+    : r.t === 'h' ? `<div class="h">${r.plain ? esc(r.text) : `${esc(r.text.replace(/@@([^@]*)@@.*/, '@@$1@@'))} <span class="dim">${hl(r.ctx.trim(), r.ext)}</span>`}</div>`
+    : r.t === 'a' ? `<div class="ln a"><span class="n"></span><span class="n">${r.n}</span><span class="s">+</span><span>${r.html || hl(r.text, r.ext)}</span></div>`
+    : r.t === 'd' ? `<div class="ln d"><span class="n">${r.o}</span><span class="n"></span><span class="s">-</span><span>${r.html || hl(r.text, r.ext)}</span></div>`
+    : r.t === 'm' ? `<div class="ln"><span class="n"></span><span class="n"></span><span class="s"></span><span class="dim">${esc(r.text)}</span></div>`
+    : `<div class="ln"><span class="n">${r.o}</span><span class="n">${r.n}</span><span class="s"></span><span>${hl(r.text, r.ext)}</span></div>`);
+  return `<div class="diff">${out.join('')}</div>${cut ? '<p class="pad dim" style="margin-top:10px">The rest is not shown: this diff is very long.</p>' : ''}`;
+}
+const TYPES = ['feat', 'fix', 'chore', 'docs', 'refactor', 'perf', 'test', 'style', 'build', 'ci'];
+const typeOf = (subject) => { const m = subject.match(/^(\w+)(\([^)]*\))?!?:\s*/); return m && TYPES.includes(m[1].toLowerCase()) ? [m[1].toLowerCase(), m[0], subject.slice(m[0].length)] : ['', '', subject]; };
+const whoDot = (name) => { let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360; return `<span class="who" style="background:hsl(${h} 62% 66%)">${esc((name.match(/[A-Za-z]/) || ['?'])[0].toUpperCase())}</span>`; };
+const dayWord = (at) => { const d = at.slice(0, 10), t = new Date(), k = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; const y = new Date(t); y.setDate(t.getDate() - 1); return d === k(t) ? 'Today' : d === k(y) ? 'Yesterday' : new Date(d + 'T12:00:00').toLocaleDateString('en-CA', { weekday: 'long', month: 'short', day: 'numeric' }); };
+async function gitCheck(force) {
+  if (G.busy || tab !== 'git' || (!G.seen && !force)) return; G.busy = true; const dot = $('.ghead .live i'); if (dot) dot.classList.add('busy');
+  try {
+    const st = await invoke('git_status', { repo: G.repo }); const sig = JSON.stringify([st.branch, st.ahead, st.behind, st.files]);
+    const changed = sig !== G.sig; G.status = st; G.at = Date.now(); G.sig = sig;
+    if (changed && tab === 'git') { if (G.sub === 'history' && G.log) G.log = await invoke('git_log', { repo: G.repo, skip: 0 }); drawTabs(); gitDraw(true); }
+    else gitStamp();
+    clearTimeout(G.timer); G.timer = setTimeout(gitCheck, Math.max(4000, st.ms * 3));
+  } catch (e) { say(String(e), 'bad'); clearTimeout(G.timer); G.timer = setTimeout(gitCheck, 15000); }
+  finally { G.busy = false; const d2 = $('.ghead .live i'); if (d2) d2.classList.remove('busy'); }
+}
+function gitStamp() { const el = $('.ghead .live span'); if (el && G.at) { const s = Math.round((Date.now() - G.at) / 1000); el.textContent = `live · checked ${s < 2 ? 'just now' : s + ' s ago'}`; } }
+setInterval(gitStamp, 1000);
+async function drawGit() {
+  const v = $('#view');
+  if (!G.repos) { v.innerHTML = '<div class="ghead"><h1>Git</h1></div><p class="pad lead" style="padding:14px 22px">Reading the repos…</p>'; try { G.repos = await invoke('git_repos'); G.repo = (G.repos[0] || {}).name || null; } catch (e) { v.innerHTML = `<p class="bad" style="padding:20px 22px">${esc(String(e))}</p>`; return; } if (tab !== 'git') return; }
+  if (!G.repo) { v.innerHTML = '<div class="ghead"><h1>Git</h1></div><p class="lead" style="padding:14px 22px">This project is not a git repository.</p>'; return; }
+  if (!G.status) { v.innerHTML = `<div class="ghead"><h1>Git</h1><span class="br">${esc(G.repo)}</span></div><p class="lead" style="padding:14px 22px">Reading what changed (the first read of a large repo takes a few seconds)…</p>`; G.seen = true; await gitCheck(true); if (!G.status || tab !== 'git') return; }
+  gitDraw(false); clearTimeout(G.timer); G.timer = setTimeout(gitCheck, 4000);
+}
+function gitDraw(keep) {
+  const v = $('#view'); if (tab !== 'git') return; const st = G.status, q = $('#q').value.trim().toLowerCase();
+  const scroll = keep && $('.glist') ? $('.glist').scrollTop : 0, vscroll = keep && $('.gview') ? $('.gview').scrollTop : 0;
+  const track = st.upstream ? (st.ahead || st.behind ? `${st.ahead ? `${st.ahead} not pushed` : ''}${st.ahead && st.behind ? ' · ' : ''}${st.behind ? `${st.behind} to pull` : ''} · ${st.upstream}` : `up to date with ${st.upstream}`) : 'no upstream branch';
+  let list = '';
+  if (G.sub === 'changes') {
+    const F = st.files.filter((f) => !q || f.path.toLowerCase().includes(q));
+    const row = (f, kind) => { const L = kind === 'staged' ? f.staged : letter(f); const key = `${kind}:${f.path}`; return `<button class="grow" data-gf="${esc(f.path)}" data-gk="${kind}" aria-selected="${G.sel === key}"><span class="sb ${L}">${L === 'N' ? '+' : L}</span><span class="p">${pathHtml(f.path)}</span><span class="c">${f.add != null && kind !== 'new' ? `<span class="a">+${f.add}</span> <span class="r">−${f.del}</span>${stat(f.add, f.del)}` : kind === 'new' ? '<span class="a">new</span>' : ''}</span></button>`; };
+    const staged = F.filter((f) => f.staged !== '.' && f.work !== '?'), work = F.filter((f) => f.work !== '.' && f.work !== '?'), fresh = F.filter((f) => f.work === '?');
+    list = (staged.length ? `<div class="group">Staged for the next commit · ${staged.length}</div>${staged.map((f) => row(f, 'staged')).join('')}` : '') + (work.length ? `<div class="group">Changed · ${work.length}</div>${work.map((f) => row(f, 'work')).join('')}` : '') + (fresh.length ? `<div class="group">New, not tracked yet · ${fresh.length}</div>${fresh.map((f) => row(f, 'new')).join('')}` : '') || `<div class="group">${q ? 'No changed file matches.' : 'Nothing has changed since the last commit.'}</div>`;
+    if (st.total > st.files.length) list += `<div class="group">Showing ${st.files.length} of ${num(st.total)} changed files.</div>`;
+  } else if (G.sub === 'history') {
+    const C = (G.log || []).filter((c) => !q || (c.subject + ' ' + c.short + ' ' + c.who).toLowerCase().includes(q));
+    let lastDay = ''; list = G.log ? C.map((c) => { const [ty, pre, rest] = typeOf(c.subject); const day = dayWord(c.at); const head = day !== lastDay ? `<div class="day">${esc(day)}</div>` : ''; lastDay = day; return `${head}<button class="crow ${ty ? 't-' + ty : ''}${c.unpushed ? ' un' : ''}" data-gc="${c.sha}" aria-selected="${G.sel === 'c:' + c.sha}"><i class="dot"></i><span class="t">${pre ? `<span class="ty">${esc(pre.trim())}</span> ` : ''}${esc(rest)}</span><span class="s">${whoDot(c.who)}<code>${c.short}</code> · ${esc(c.at.slice(11))} · ${esc(c.ago)}${c.unpushed ? ' · <span class="up">↑ not pushed</span>' : ''}${c.refs ? ' · <span class="pr">' + esc(c.refs.replace(/HEAD -> /, '')) + '</span>' : ''}</span></button>`; }).join('') || '<div class="group">No commit matches.</div>' : '<div class="group">Reading the history…</div>';
+  } else {
+    const changed = new Map(st.files.map((f) => [f.path, letter(f)])); const rows = [];
+    const walk = (dir, depth) => { for (const it of G.tree[dir] || []) { if (q && !it.dir && !it.path.toLowerCase().includes(q)) continue; const pad = `style="padding-left:${10 + depth * 14}px"`; if (it.dir) { const open = G.open.has(it.path); const dirty = [...changed.keys()].some((k) => k.startsWith(it.path + '/')); rows.push(`<button class="trow dir" ${pad} data-gd="${esc(it.path)}"><span class="tw">${open ? '▾' : '▸'}</span><span class="ic"><svg width="13" height="11" viewBox="0 0 13 11" aria-hidden="true"><path d="M0.5 1.5a1 1 0 011-1h3l1.2 1.5h5.8a1 1 0 011 1v6.5a1 1 0 01-1 1h-10a1 1 0 01-1-1z" fill="currentColor" fill-opacity="${open ? 0.3 : 0.85}" stroke="currentColor"/></svg></span><span>${esc(it.name)}</span>${dirty ? `<span class="l" style="color:#f0b429">${[...changed.keys()].filter((k) => k.startsWith(it.path + '/')).length}</span>` : ''}</button>`); if (open) walk(it.path, depth + 1); } else { const L = changed.get(it.path); rows.push(`<button class="trow" ${pad} data-gt="${esc(it.path)}" aria-selected="${G.sel === 't:' + it.path}"><span class="tw"></span><span class="ic">${fdot(it.path).replace('margin-right', 'margin-left:0;margin-right')}</span><span${L ? ` style="color:${L === 'D' ? '#f0605f' : L === 'N' || L === 'A' ? '#3ecf72' : '#f0b429'}"` : ''}>${esc(it.name)}</span>${L ? `<span class="l"><span class="sb ${L}">${L === 'N' ? '+' : L}</span></span>` : ''}</button>`); } } };
+    walk('', 0); list = G.tree[''] ? rows.join('') : '<div class="group">Reading the tree…</div>';
+  }
+  const had = keep && $('.gview') ? $('.gview').innerHTML : '';
+  v.innerHTML = `<div><div class="ghead"><h1>Git</h1>${G.repos.length > 1 ? `<select class="in" id="grepo" aria-label="Repo">${G.repos.map((r) => `<option${r.name === G.repo ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}</select>` : `<span class="br">${esc(G.repo)}</span>`}<span class="chip"><svg width="11" height="12" viewBox="0 0 11 12" fill="none" aria-hidden="true"><circle cx="2.5" cy="2.5" r="1.6" stroke="currentColor" stroke-width="1.2"/><circle cx="2.5" cy="9.5" r="1.6" stroke="currentColor" stroke-width="1.2"/><circle cx="8.5" cy="4" r="1.6" stroke="currentColor" stroke-width="1.2"/><path d="M2.5 4.1v3.8M8.5 5.6c0 2-2.2 2-4.4 2.6" stroke="currentColor" stroke-width="1.2"/></svg>${esc(st.branch)}</span>${st.upstream ? (st.ahead || st.behind ? `${st.ahead ? `<span class="up">↑${st.ahead} to push</span>` : ''}${st.behind ? `<span class="down">↓${st.behind} to pull</span>` : ''}` : '<span class="even">✓ in step</span>') + `<span class="dim">${esc(st.upstream)}</span>` : '<span class="dim">no upstream branch</span>'}<span class="live"><i></i><span></span></span></div>
+    ${(() => { const A = st.files.reduce((n, f) => n + (f.add || 0), 0), R = st.files.reduce((n, f) => n + (f.del || 0), 0), T = A + R; return T ? `<div class="gsum"><span>${num(st.total)} files changed</span><span class="bar"><i class="a" style="width:${A / T * 100}%"></i><i class="r" style="width:${R / T * 100}%"></i></span><b><span class="pa">+${num(A)}</span> <span class="pr">−${num(R)}</span></b></div>` : ''; })()}
+    <div class="gsub">${[['changes', 'Changes', st.total], ['history', 'History', ''], ['tree', 'Files', '']].map(([k, t, n]) => `<button data-gs="${k}" aria-selected="${G.sub === k}">${t}<span>${n === '' ? '' : num(n)}</span></button>`).join('')}</div></div>
+    <div class="gbody"><div class="glist">${list}</div><div class="gview">${had || '<p class="pad dim">Pick a file or a commit on the left.</p>'}</div></div>`;
+  $('.glist').scrollTop = scroll; if (had) $('.gview').scrollTop = vscroll; gitStamp();
+  if (keep && G.sel && (G.sel.startsWith('work:') || G.sel.startsWith('staged:') || G.sel.startsWith('new:'))) { const [kind, ...rest] = G.sel.split(':'); if (st.files.some((f) => f.path === rest.join(':'))) gitShowFile(rest.join(':'), kind, true); }
+}
+async function gitShowFile(path, kind, quiet) {
+  G.sel = `${kind}:${path}`; if (!quiet) { document.querySelectorAll('.grow').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.gf === path && b.dataset.gk === kind))); $('.gview').innerHTML = '<p class="pad dim">Reading…</p>'; }
+  try { const d = await invoke('git_diff', { repo: G.repo, kind, path, sha: null }); if (G.sel !== `${kind}:${path}` || !$('.gview')) return; const keepTop = quiet ? $('.gview').scrollTop : 0; $('.gview').innerHTML = (kind === 'new' ? `<div class="diff"><div class="f">${fdot(path)}${esc(path)} <span class="cnt"><span class="pa">new file</span></span></div></div>` : '') + diffHtml(kind === 'new' ? `@@ -0,0 +1 @@\n${d.text}` : d.text, d.cut, path); $('.gview').scrollTop = keepTop; } catch (e) { if ($('.gview')) $('.gview').innerHTML = `<p class="pad bad">${esc(String(e))}</p>`; }
+}
+async function gitShowCommit(sha, file) {
+  G.sel = 'c:' + sha; document.querySelectorAll('.crow').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.gc === sha)));
+  try {
+    if (!G.commit || G.commit.sha !== sha) { $('.gview').innerHTML = '<p class="pad dim">Reading…</p>'; G.commit = await invoke('git_commit', { repo: G.repo, sha }); }
+    const c = G.commit; if (G.sel !== 'c:' + sha || !$('.gview')) return; const [subject, ...body] = c.message.split('\n');
+    const add = c.files.reduce((n, f) => n + (Number(f.add) || 0), 0), del = c.files.reduce((n, f) => n + (Number(f.del) || 0), 0);
+    $('.gview').innerHTML = `<div class="pad"><h1 class="${typeOf(subject)[0] ? 't-' + typeOf(subject)[0] : ''}" style="font:600 16px/1.35 var(--disp);margin:0 0 4px">${typeOf(subject)[1] ? `<span class="ty" style="color:var(--tc)">${esc(typeOf(subject)[1].trim())}</span> ` : ''}${esc(typeOf(subject)[2])}</h1><div class="meta"><code>${esc(c.sha.slice(0, 10))}</code><span>${whoDot(c.who)}${esc(c.who)}</span><span>${esc(c.at)}</span><span>${c.files.length} files</span></div><div class="gsum" style="padding:0 0 12px"><span class="bar"><i class="a" style="width:${add + del ? add / (add + del) * 100 : 0}%"></i><i class="r" style="width:${add + del ? del / (add + del) * 100 : 0}%"></i></span><b><span class="pa">+${num(add)}</span> <span class="pr">−${num(del)}</span></b></div>${body.join('\n').trim() ? `<div class="text" style="margin-bottom:12px">${esc(body.join('\n').trim())}</div>` : ''}</div>
+      <div style="padding:0 12px">${c.files.map((f) => `<button class="grow" data-gcf="${esc(f.path)}" aria-selected="${file === f.path}"><span class="l"></span><span class="p">${pathHtml(f.path)}</span><span class="c"><span class="a">+${esc(f.add)}</span> <span class="r">−${esc(f.del)}</span>${stat(f.add, f.del)}</span></button>`).join('')}</div><div id="cdiff">${file ? '<p class="pad dim" style="margin-top:10px">Reading…</p>' : '<p class="pad dim" style="margin-top:10px">Pick a file to see what changed in it.</p>'}</div>`;
+    if (file) { const d = await invoke('git_diff', { repo: G.repo, kind: 'commit', path: file, sha }); if ($('#cdiff') && G.sel === 'c:' + sha) $('#cdiff').innerHTML = diffHtml(d.text, d.cut, file); }
+  } catch (e) { if ($('.gview')) $('.gview').innerHTML = `<p class="pad bad">${esc(String(e))}</p>`; }
+}
+async function gitTreeOpen(dir) { if (!G.tree[dir]) { try { G.tree[dir] = await invoke('git_tree', { repo: G.repo, dirPath: dir }); } catch (e) { say(String(e), 'bad'); G.tree[dir] = []; } } if (tab === 'git' && G.sub === 'tree') gitDraw(true); }
+async function gitShowTreeFile(path) {
+  const f = G.status.files.find((x) => x.path === path); if (f) { G.sub = 'tree'; await gitShowFile(path, f.work === '?' ? 'new' : 'work'); G.sel = 't:' + path; return; }
+  G.sel = 't:' + path; document.querySelectorAll('.trow[data-gt]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.gt === path))); $('.gview').innerHTML = '<p class="pad dim">Reading…</p>';
+  try { const d = await invoke('git_file', { repo: G.repo, path }); if (G.sel !== 't:' + path) return; $('.gview').innerHTML = d.binary ? `<p class="pad dim">${esc(path)} is a binary file (${num(d.bytes)} bytes).</p>` : `<div class="diff"><div class="f">${fdot(path)}${esc(path)} <span class="cnt dim">unchanged</span></div>${d.text.split('\n').slice(0, 3000).map((l, i) => `<div class="ln"><span class="n"></span><span class="n">${i + 1}</span><span class="s"></span><span>${hl(l, extOf(path))}</span></div>`).join('')}</div>${d.cut ? '<p class="pad dim">The rest is not shown: the file is very long.</p>' : ''}`; } catch (e) { $('.gview').innerHTML = `<p class="pad bad">${esc(String(e))}</p>`; }
+}
+function gitReset() { clearTimeout(G.timer); Object.assign(G, { repos: null, repo: null, sub: 'changes', status: null, log: null, sel: null, commit: null, open: new Set(['']), tree: {}, sig: '', at: 0 }); }
+// ---- the console: Claude Code, Ubuntu and PowerShell sessions, from every project, as tabs and tiles ----
+const CC = { list: [], active: null, n: 0, draft: '', running: [], at: 0, layout: localStorage.getItem('layout') == null ? 0 : Number(localStorage.getItem('layout')), launch: false, proj: null, restored: false, sig: '' };
+const KINDS = { claude: 'Claude Code', ubuntu: 'Ubuntu', powershell: 'PowerShell' };
+const TERM_THEME = { background: 'rgba(0,0,0,0)', foreground: '#e6e9ee', cursor: '#5cc8ff', cursorAccent: '#0a0d12', selectionBackground: 'rgba(92,200,255,0.3)', black: '#1b2028', brightBlack: '#5a6270', red: '#f0605f', brightRed: '#ff8f8a', green: '#3ecf72', brightGreen: '#74e39a', yellow: '#f0b429', brightYellow: '#ffd166', blue: '#5b9cf0', brightBlue: '#8fbcff', magenta: '#c4a7ff', brightMagenta: '#dcc8ff', cyan: '#5cc8ff', brightCyan: '#9be0ff', white: '#c0c6cf', brightWhite: '#ffffff' };
+const ccGet = (id) => CC.list.find((x) => x.id === id);
+const ccProj = () => (CC.proj == null || CC.proj >= PROJ.names.length ? PROJ.current : CC.proj);
+const kindMark = (k) => `<span class="km ${k}">${k === 'claude' ? 'C' : k === 'ubuntu' ? '$' : '>_'}</span>`;
+const sinceWord = (secs) => { const m = Math.max(0, Math.round((Date.now() / 1000 - secs) / 60)); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+// the chords that belong to the console, whether a session has the keyboard or not
+function ccChord(e) {
+  if (e.type !== 'keydown') return false; const k = e.key.toLowerCase();
+  if (e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) { const x = CC.list[Number(e.key) - 1]; if (x) ccShow(x.id); return true; }
+  if (e.ctrlKey && e.key === 'Tab') { if (CC.list.length) { const i = CC.list.findIndex((x) => x.id === CC.active); ccShow(CC.list[(i + (e.shiftKey ? CC.list.length - 1 : 1)) % CC.list.length].id); } return true; }
+  if (!e.ctrlKey || !e.shiftKey) return false;
+  if (k === 'n') { ccStart('claude'); return true; } if (k === 'u') { ccStart('ubuntu'); return true; } if (k === 'p') { ccStart('powershell'); return true; }
+  if (k === 'o') { const x = ccGet(CC.active); if (x) ccPop(x.id); return true; }
+  if (k === 'l') { ccSetLayout({ 0: 1, 1: 2, 2: 4, 4: 6, 6: 0 }[CC.layout] ?? 1); return true; }
+  if (k === 'a') { ccSetLayout(0); return true; }
+  if (k === 'k') { ccLauncher(true); return true; }
+  return false;
+}
+// Highlighted text goes to the clipboard: by the page if it may, else through the app.
+function copyText(t) { if (!t) return; const done = () => { if (document.getElementById('msg')) say(`Copied ${t.length > 60 ? num(t.length) + ' characters' : 'to the clipboard'}`, 'ok'); }; const viaApp = () => invoke('clip_set', { text: t }).then(done).catch(() => {}); try { navigator.clipboard.writeText(t).then(done, viaApp); } catch (_) { viaApp(); } }
+function makeTerm(el, chords) {
+  const term = new Terminal({ fontFamily: '"Cascadia Code", "Cascadia Mono", Consolas, monospace', fontSize: 13, lineHeight: 1.22, cursorBlink: true, allowTransparency: true, scrollback: 10000, macOptionIsMeta: true, theme: TERM_THEME });
+  const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(el);
+  // Highlighting copies. In a Claude or Ubuntu session tmux owns the mouse: it sends what was selected as an OSC 52 sequence
+  // ("52;<which>;<base64>") when the button is released. In PowerShell, or with Shift held, the terminal itself selects.
+  term.parser.registerOscHandler(52, (data) => { const b64 = data.slice(data.indexOf(';') + 1); if (!b64 || b64 === '?') return true; try { const bin = atob(b64); const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0)); copyText(new TextDecoder('utf-8').decode(bytes)); } catch (_) {} return true; });
+  let selT = null; term.onSelectionChange(() => { clearTimeout(selT); selT = setTimeout(() => { const t = term.getSelection(); if (t && t.trim()) copyText(t); }, 300); });
+  // Ctrl+Shift+C copies what is selected, Ctrl+Shift+V pastes; the console's own chords are taken; everything else goes to the program
+  term.attachCustomKeyEventHandler((e) => { if (e.type !== 'keydown') return true; if (e.ctrlKey && e.shiftKey) { const k = e.key.toLowerCase(); if (k === 'c') { const t = term.getSelection(); if (t) navigator.clipboard.writeText(t).catch(() => {}); return false; } if (k === 'v') { navigator.clipboard.readText().then((t) => { if (t) term.paste(t); }).catch(() => {}); return false; } } if (chords && chords(e)) { e.preventDefault(); return false; } return true; });
+  return { term, fit };
+}
+function ccFit(x) { if (!x || x.tile.hidden || !x.body.offsetWidth) return; try { x.fit.fit(); } catch (_) {} }
+function ccLayout() {
+  const grid = $('.cgrid'); if (!grid) return; const cover = $('.cover'); const starting = CC.launch || !CC.list.length; grid.hidden = starting; if (starting) { cover.hidden = true; return; } cover.hidden = CC.layout !== 0; if (CC.layout === 0) { CC.list.forEach((x) => { x.tile.hidden = true; }); return drawOverview(); } const n = CC.layout; const i = Math.max(0, CC.list.findIndex((x) => x.id === CC.active)); const page = Math.floor(i / n); let shown = 0;
+  CC.list.forEach((x, k) => { const on = Math.floor(k / n) === page; x.tile.hidden = !on; if (on) shown++; x.tile.classList.toggle('on', x.id === CC.active && (n > 1)); });
+  const cols = shown <= 1 ? 1 : n === 2 ? 2 : shown <= 4 ? 2 : 3; grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`; grid.style.gridTemplateRows = `repeat(${Math.max(1, Math.ceil(shown / cols))}, minmax(0, 1fr))`;
+  requestAnimationFrame(() => CC.list.forEach(ccFit));
+}
+function ccSetLayout(n) { if (n !== 0) CC.back = n; CC.layout = n; try { localStorage.setItem('layout', String(n)); } catch (_) {} ccLayout(); drawDock(); const x = ccGet(CC.active); if (x && tab === 'claude') x.term.focus(); }
+function ccShow(id, focus = true) { const x = ccGet(id); if (!x) return; if (CC.layout === 0) CC.layout = CC.back || 1; CC.active = id; CC.launch = false; x.unseen = false; x.bell = false; x.done = false; drawClaude(); if (focus && tab === 'claude') requestAnimationFrame(() => { ccFit(x); x.term.focus(); }); }
+const stateOf = (x) => !x.live ? 'ended' : x.bell ? 'needs' : Date.now() - x.lastOut < 1600 ? 'working' : x.done && x.unseen ? 'finished' : x.unseen ? 'new' : 'idle';
+const STATE_WORD = { ended: 'ended', needs: 'wants you', working: 'working', finished: 'finished', new: 'new output', idle: 'idle' };
+const IC = { pop: '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M5 2H2.5A.5.5 0 002 2.5v7a.5.5 0 00.5.5h7a.5.5 0 00.5-.5V7M7 2h3v3M10 2L5.5 6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>', leave: '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 9.5h8M6 2v5.5M3.8 5.5L6 7.7l2.2-2.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>', end: '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7m0-7l-7 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' };
+function tileHead(x) { const st = stateOf(x); x.head.innerHTML = `${kindMark(x.kind)}<b>${esc(x.label)}</b><span class="w">${esc(x.project)}</span><i class="sd ${st}"></i><span class="w">${STATE_WORD[st]}</span><span class="sp">${x.keeps && x.live ? `<button class="ib" data-cpop="${x.id}" title="Give it a window of its own (Ctrl+Shift+O)">${IC.pop}</button><button class="ib" data-cleave="${x.id}" title="Take it off the screen; it keeps running">${IC.leave}</button>` : ''}<button class="ib x" data-cend="${x.id}" title="${x.live ? 'End this session' : 'Remove'}">${IC.end}</button></span>`; }
+// One tab per session: its name (what you asked), what it is doing right now, its project, and a way to end it.
+function drawDockTabs() {
+  const el = $('.cdock .tabs'); if (!el) return; const armed = CC.arm && Date.now() < CC.arm.until ? CC.arm.id : null;
+  el.innerHTML = CC.list.map((x, i) => { const st = stateOf(x); const pk = st === 'ended' ? { now: '' } : peek(x); const doing = st === 'working' ? (pk.now || 'Working…') : st === 'idle' && x.kind !== 'claude' ? (pk.now || 'Idle') : sayState(x, st);
+    return `<div class="stab ${st} ${x.id === CC.active && !CC.launch && CC.layout !== 0 ? 'on' : ''}" role="button" tabindex="0" data-csel="${x.id}" title="${esc(x.label)}${x.asked && x.asked !== x.label ? '\nAsked: ' + esc(x.asked) : ''}\n${esc(doing)}\n${esc(x.project)} · ${esc(KINDS[x.kind])}"><span class="num">${i < 9 ? i + 1 : ''}</span>${kindMark(x.kind)}<span class="tx"><span class="t">${esc(x.label)}</span><span class="n"><span class="w">${esc(doing)}</span> · ${esc(x.project)}</span></span><span class="tc ${armed === x.id ? 'sure' : ''}" data-cclose="${x.id}" title="${x.live ? 'End this session (click twice)' : 'Remove'}">${armed === x.id ? 'End?' : '×'}</span></div>`; }).join('') || '<span class="dim" style="padding:6px 4px">No session is open. Start one below.</span>';
+}
+function drawDock() {
+  const dock = $('.cdock'); if (!dock) return;
+  const ctl = `${ccProj()}|${PROJ.names.join(',')}|${(PROJ.favs || []).join('')}|${CC.layout}|${CC.launch}|${CC.list.length > 0}`;
+  if (!$('.cdock .tabs') || dock.dataset.ctl !== ctl) {
+    dock.dataset.ctl = ctl;
+    dock.innerHTML = `<div class="tabs"></div><div class="dr"><span class="dim">Start in</span><select class="in" id="cproj" aria-label="Project to start in" title="Where the next session starts">${projOptions(ccProj())}</select>
+    <button class="act" data-cterm="claude" title="New Claude Code session (Ctrl+Shift+N)">${kindMark('claude')}Claude</button><button class="act" data-cterm="ubuntu" title="New Ubuntu terminal (Ctrl+Shift+U)">${kindMark('ubuntu')}Ubuntu</button><button class="act" data-cterm="powershell" title="New PowerShell terminal (Ctrl+Shift+P)">${kindMark('powershell')}PowerShell</button>
+    ${CC.list.length ? `<button class="act" data-claunch title="${CC.launch ? 'Back to the sessions (Esc)' : 'Start with a message, resume, or reopen a running session (Ctrl+Shift+K)'}">${CC.launch ? 'Back to the sessions' : 'More…'}</button>` : ''}
+    <span class="gap dim">Show</span><span class="lay" role="group" aria-label="How many sessions to show at once" title="All at a glance (Ctrl+Shift+A), or sessions side by side (Ctrl+Shift+L)"><button data-clay="0" aria-pressed="${CC.layout === 0}">All</button>${[1, 2, 4, 6].map((n) => `<button data-clay="${n}" aria-pressed="${CC.layout === n}">${n}</button>`).join('')}</span></div>`;
+  }
+  drawDockTabs(); CC.list.forEach(tileHead); CC.sig = CC.list.map((x) => x.id + stateOf(x)).join('|') + CC.active + CC.layout + CC.launch;
+}
+// ending from a tab: a running session asks once more, so a slip does not stop an agent mid-task
+function ccCloseTab(id) { const x = ccGet(id); if (!x) return; if (!x.live || (CC.arm && CC.arm.id === id && Date.now() < CC.arm.until)) { CC.arm = null; return ccEnd(id, true); } CC.arm = { id, until: Date.now() + 4000 }; drawDockTabs(); setTimeout(() => { if (CC.arm && CC.arm.id === id && Date.now() >= CC.arm.until) { CC.arm = null; drawDockTabs(); } }, 4100); }
+async function ccRefresh() { try { CC.running = await invoke('term_list'); CC.at = Date.now(); } catch (_) { CC.running = []; } if (tab === 'claude' && (CC.launch || !CC.list.length)) drawLauncher(); }
+// kind: claude | ubuntu | powershell · o: { mode: new|continue|resume|attach, session, prompt, label, name, proj, project, quiet }
+async function ccStart(kind, o = {}) {
+  if (typeof Terminal === 'undefined') return say('The terminal part of the app did not load', 'bad');
+  const mode = o.mode || 'new'; const text = (o.prompt || '').trim(); const proj = o.proj != null ? o.proj : ccProj(); const project = o.project || PROJ.names[proj] || D.project.name;
+  const id = `s${++CC.n}-${Date.now().toString(36)}`;
+  const tile = document.createElement('div'); tile.className = 'tile'; tile.dataset.id = id; tile.innerHTML = '<div class="thead"></div><div class="tbody"><div class="term"></div></div>'; $('.cgrid').appendChild(tile);
+  const { term, fit } = makeTerm($('.term', tile), ccChord);
+  const label = o.label || (kind !== 'claude' ? KINDS[kind] : mode === 'continue' ? 'Continued session' : text ? text.replace(/\s+/g, ' ').slice(0, 60) : 'Claude');
+  const x = { id, tile, head: $('.thead', tile), body: $('.tbody', tile), term, fit, kind, live: true, keeps: kind !== 'powershell' && !(mode !== 'attach' && PROJ.native && PROJ.native[proj]), name: o.name || '', project, label, at: new Date(), lastOut: Date.now(), unseen: false, bell: false, done: false, was: 'working', typing: '', asked: text, named: !!(o.label || text || mode !== 'new') };
+  CC.list.push(x); CC.draft = ''; if (!o.quiet || !CC.active) { CC.active = id; CC.launch = false; }
+  new ResizeObserver(() => ccFit(x)).observe(x.body);
+  drawClaude(); await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); ccFit(x); if (!o.quiet && tab === 'claude') term.focus();
+  term.onData((d) => { if (x.live) invoke('term_write', { id, data: d }).catch(() => {}); ccTyped(x, d); });
+  term.onResize(({ cols, rows }) => { if (x.live) invoke('term_resize', { id, cols, rows }).catch(() => {}); });
+  try { const made = await invoke('term_open', { id, kind, mode, proj: mode === 'attach' ? null : proj, name: o.name || null, session: o.session || null, prompt: text || null, label, cols: term.cols, rows: term.rows }); if (made) x.name = made; }
+  catch (e) { x.live = false; term.write(`\r\n\x1b[31m${String(e)}\x1b[0m\r\n`); say(String(e), 'bad'); }
+  drawTabs(); drawDock(); setTimeout(ccRefresh, 1500);
+}
+// What you type into a Claude session, up to Enter, is what you asked it: the first one names the session, the latest is shown on its card.
+function ccTyped(x, d) {
+  if (x.kind !== 'claude') return;
+  if (d === '\r') { const t = x.typing.replace(/\s+/g, ' ').trim(); x.typing = ''; if (t.length < 3 || t.startsWith('/')) return; x.asked = t; if (!x.named) { x.named = true; x.label = t.slice(0, 60); if (x.name) invoke('term_label', { name: x.name, label: x.label }).catch(() => {}); drawDock(); } return; }
+  if (d === '\x7f') { x.typing = x.typing.slice(0, -1); return; }
+  if (d === '\x03' || d === '\x15') { x.typing = ''; return; }
+  if (d.startsWith('\x1b')) { const m = d.match(/\x1b\[200~([\s\S]*?)\x1b\[201~/); if (m) x.typing += m[1]; return; }
+  if (d >= ' ') x.typing = (x.typing + d).slice(-2000);
+}
+// take a session off the screen; `end` also stops the program (a Claude or Ubuntu session otherwise keeps running in WSL)
+function ccEnd(id, end = true) { const x = ccGet(id); if (!x) return; const i = CC.list.indexOf(x); invoke('term_close', { id, name: x.name || null, end }).catch(() => {}).then(() => setTimeout(ccRefresh, 600)); x.live = false; x.term.dispose(); x.tile.remove(); CC.list.splice(i, 1); if (CC.active === id) CC.active = (CC.list[Math.min(i, CC.list.length - 1)] || {}).id || null; drawTabs(); drawClaude(); const y = ccGet(CC.active); if (y && tab === 'claude') y.term.focus(); }
+async function ccPop(id) { const x = ccGet(id); if (!x) return; if (!x.keeps || !x.live || !x.name) return say('Only a running Claude or Ubuntu session can have a window of its own', 'bad'); try { await invoke('pop_out', { name: x.name, kind: x.kind, label: `${x.label} · ${x.project}` }); ccEnd(id, false); } catch (e) { say(String(e), 'bad'); } }
+function ccLauncher(on) { CC.launch = on; drawClaude(); if (on) { const ta = $('#cprompt'); if (ta) ta.focus(); } else { const x = ccGet(CC.active); if (x) x.term.focus(); } }
+function drawLauncher() {
+  const el = $('.claunch'); if (!el) return; const show = CC.launch || !CC.list.length; el.hidden = !show; if (!show) return;
+  const here = new Set(CC.list.filter((s) => s.live).map((s) => s.name)); const away = (CC.running || []).filter((r) => !here.has(r.name));
+  const S = D.sessions || {}; const old = ccProj() === PROJ.current ? ((S.recent || []).some((s) => s.ask) ? S.recent : S.past || []).filter((s) => s.ask).slice(0, 8) : [];
+  const nat = !!(PROJ.native && PROJ.native[ccProj()]); const when = (up) => typeof up === 'number' ? new Date(up * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : String(up).slice(0, 16).replace('T', ' ');
+  if (!CC.check) CC.check = {}; const ck = CC.check[ccProj()]; if (ck === undefined && ccProj() === PROJ.current && PROJ.names.length) { CC.check[ccProj()] = null; const at = ccProj(); invoke('term_check').then((c) => { CC.check[at] = c; if (tab === 'claude' && !$('#cprompt').value) drawLauncher(); }).catch(() => {}); }
+  const missing = !ck ? '' : !ck.claude ? `Claude Code was not found ${ck.native ? 'on Windows' : 'in ' + ck.distro}: install it there first, then start a session.` : (!ck.native && !ck.tmux) ? `tmux was not found in ${ck.distro}, so sessions end when Maestro closes. Install it (for example sudo apt install tmux) and they keep running.` : '';
+  const keep = $('#cprompt') ? $('#cprompt').value : CC.draft; const pn = PROJ.names[ccProj()] || '';
+  el.innerHTML = `<div class="col"><h1>Start Claude Code in ${PROJ.names.length > 1 ? `<select class="in" id="cproj2" aria-label="Project">${projOptions(ccProj())}</select>` : esc(pn)}</h1>${missing ? `<p class="warn">${esc(missing)}</p>` : ''}<p>Tell it what to do, or leave the box empty to just open a session. It runs with that project's rules, hooks, skills and memory, and asks before anything your settings do not already allow.</p>
+    <textarea id="cprompt" placeholder="What should it do?" spellcheck="false"></textarea>
+    <div class="row"><button class="act go" data-cgo>Start</button><span class="dim"><kbd>Ctrl</kbd> <kbd>Enter</kbd></span><button class="act" data-ccont>Continue the last conversation</button></div>
+    <h2>Or open a terminal in ${esc(pn)}</h2><div class="row" style="margin-top:0">${nat ? '' : `<button class="act" data-cterm="ubuntu">${kindMark('ubuntu')}Ubuntu</button>`}<button class="act" data-cterm="powershell">${kindMark('powershell')}PowerShell</button></div>
+    ${PROJ.names.length > 1 ? `<h2>${projOrder().favs.length ? 'One click, your favourites' : 'One click, any project'}</h2><div class="matrix">${(projOrder().favs.length ? projOrder().favs : projOrder().rest.slice(0, 8)).map((i) => [PROJ.names[i], i]).map(([n, i]) => `<span class="n">${esc(n)}</span><button class="act" data-cterm="claude" data-p="${i}">${kindMark('claude')}Claude</button>${PROJ.native && PROJ.native[i] ? '<span></span>' : `<button class="act" data-cterm="ubuntu" data-p="${i}">${kindMark('ubuntu')}Ubuntu</button>`}<button class="act" data-cterm="powershell" data-p="${i}">${kindMark('powershell')}PowerShell</button>`).join('')}</div>` : ''}</div>
+    <div class="col">${away.length ? `<h2>Still running, not on screen${away.length > 1 ? ` <button data-cattall style="background:none;border:0;color:var(--accent);font:inherit;cursor:pointer;margin-left:8px">open all ${away.length}</button>` : ''}</h2>${away.map((r) => `<div class="sess" role="button" tabindex="0" data-catt="${esc(r.name)}" data-kind="${esc(r.kind)}" data-label="${esc(r.label)}" data-path="${esc(r.path)}" title="Open it again, scroll-back and all">${kindMark(r.kind)}<span><span class="t">${esc(r.label || r.name)}</span><span class="s">${esc(r.path.split('/').pop())} · started ${sinceWord(r.created)}${r.attached ? ' · open in another window' : ''}</span></span><span class="x" data-ckill="${esc(r.name)}" title="End this session">×</span></div>`).join('')}` : ''}
+    ${old.length ? `<h2>Resume an earlier conversation in ${esc(pn)}</h2>${old.map((s2) => `<button class="old" data-cres="${esc(s2.id)}" title="Resume this conversation"><span class="t">${esc(s2.ask)}</span><span class="s">${esc(when(s2.up))}</span></button>`).join('')}` : ''}
+    <h2>Keys</h2><div class="keys"><span><kbd>Alt</kbd> <kbd>1</kbd>…<kbd>9</kbd>, <kbd>Ctrl</kbd> <kbd>Tab</kbd></span><span>switch session</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>N</kbd> / <kbd>U</kbd> / <kbd>P</kbd></span><span>new Claude, Ubuntu, PowerShell</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>A</kbd> / <kbd>L</kbd></span><span>all at a glance, side by side</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>O</kbd></span><span>the session in its own window</span><span>Highlight text</span><span>copies it</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>V</kbd></span><span>paste</span></div>
+    <p style="margin-top:14px;font-size:12.5px">${nat ? 'In a project that runs on Windows itself, sessions end with Maestro.' : 'Claude and Ubuntu sessions keep running when Maestro closes and come back when it starts. PowerShell ends with Maestro.'}</p></div>`;
+  const ta = $('#cprompt'); if (ta && keep) ta.value = keep;
+}
+// What a session is showing right now, read from its terminal: the line that says what it is doing, and the last few lines.
+function peek(x) {
+  const buf = x.term.buffer.active; const lines = [];
+  for (let i = buf.length - 1; i >= 0 && lines.length < 60; i--) { const ln = buf.getLine(i); if (!ln) continue; const t = ln.translateToString(true); if (t.trim()) lines.unshift(t); }
+  const plain = (t) => t.replace(/[\u2500-\u257f\u2580-\u259f]/g, ' ').replace(/\s+/g, ' ').trim();
+  const body = lines.filter((t) => plain(t).length > 1 && !/^\s*[?>❯]?\s*(for shortcuts|shift\+tab|esc to|auto mode|bypass|accept edits|plan mode)/i.test(plain(t)) && !/shift\+tab to cycle|\/effort|for shortcuts/i.test(t));
+  let now = '';
+  for (let i = body.length - 1; i >= 0 && i >= body.length - 25; i--) { const t = plain(body[i]); if (/esc to interrupt|tokens\)|\(\d+s\b|…\s*\(/i.test(t)) { now = t.replace(/^[^A-Za-z0-9]+/, '').replace(/\s*\((?:[^()]*esc to interrupt[^()]*|[^()]*tokens[^()]*)\)\s*$/i, ''); break; } }
+  if (!now && x.kind !== 'claude') { const last = body[body.length - 1]; now = last ? plain(last) : ''; }
+  return { now, tail: body.slice(-7).map((t) => t.replace(/\s+$/, '').slice(0, 140)) };
+}
+const ORDER = { needs: 0, finished: 1, working: 2, new: 3, idle: 4, ended: 5 };
+const sayState = (x, st) => st === 'needs' ? 'Wants you' : st === 'finished' ? 'Finished, waiting for you' : st === 'working' ? 'Working' : st === 'new' ? 'New output' : st === 'ended' ? 'Ended' : 'Idle';
+const agoWord = (ms) => { const s2 = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s2 < 5 ? 'now' : s2 < 60 ? `${s2}s` : s2 < 3600 ? `${Math.round(s2 / 60)}m` : `${Math.round(s2 / 3600)}h`; };
+function drawOverview() {
+  const el = $('.cover'); if (!el || el.hidden) return;
+  if (!CC.list.length) { el.innerHTML = '<div class="empty">No session is open. Start one from the bar above, or press <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>N</kbd> for Claude Code.</div>'; return; }
+  const rows = CC.list.map((x, i) => ({ x, i, st: stateOf(x), pk: peek(x) })).sort((a, b) => ORDER[a.st] - ORDER[b.st] || a.i - b.i);
+  el.innerHTML = rows.map(({ x, i, st, pk }) => `<div class="agent ${st}" role="button" tabindex="0" data-csel="${x.id}" title="Open this session">
+    <div class="top"><span class="num">${i < 9 ? i + 1 : ''}</span>${kindMark(x.kind)}<b>${esc(x.label)}</b><span class="pj">${esc(x.project)}</span></div>
+    <div class="st"><i class="sd ${st}"></i><span>${sayState(x, st)}</span><span class="ago">${st === 'working' ? `running ${agoWord(x.at.getTime())}` : `quiet ${agoWord(x.lastOut)}`}</span></div>
+    ${x.asked ? `<div class="asked" title="${esc(x.asked)}">Asked: ${esc(x.asked)}</div>` : ''}
+    <div class="now ${pk.now ? '' : 'dim'}">${esc(pk.now || (st === 'working' ? 'Working…' : x.kind === 'claude' ? 'Waiting at its prompt' : ''))}</div>
+    <pre aria-hidden="true">${esc(pk.tail.join('\n'))}</pre>
+    <div class="ft"><button class="act" data-csel="${x.id}">Open</button>${x.keeps && x.live ? `<button class="act" data-cpop="${x.id}">Own window</button>` : ''}<button class="act" data-cend="${x.id}">${x.live ? 'End' : 'Remove'}</button></div></div>`).join('');
+}
+setInterval(() => { if (tab === 'claude' && CC.list.length) { drawDockTabs(); if (CC.layout === 0 && !CC.launch) drawOverview(); } else if (tab === 'all' && $('#agents')) drawAgents(); }, 1000);
+// the same, one line each, on the home screen
+function drawAgents() {
+  const el = $('#agents'); if (!el) return;
+  const rows = CC.list.map((x, i) => ({ x, i, st: stateOf(x) })).sort((a, b) => ORDER[a.st] - ORDER[b.st] || a.i - b.i);
+  el.innerHTML = rows.map(({ x, st }) => { const pk = peek(x); return `<button class="ag" data-agent="${x.id}"><i class="sd ${st}"></i>${kindMark(x.kind)}<b>${esc(x.label)}</b><span class="pj">${esc(x.project)}</span><span class="nw">${esc(pk.now || (pk.tail[pk.tail.length - 1] || '').trim())}</span><span class="wd">${sayState(x, st)}</span></button>`; }).join('');
+}
+function drawClaude() { if (!$('.cdock')) return; if (Date.now() - CC.at > 8000) { CC.at = Date.now(); ccRefresh(); } drawDock(); ccLayout(); drawLauncher(); }
+function askClaude(text) { CC.draft = text; CC.launch = true; setTab('claude'); const t2 = $('#cprompt'); if (t2) { t2.value = text; t2.focus(); t2.setSelectionRange(text.length, text.length); } }
+const ccWatching = (x) => tab === 'claude' && !CC.launch && !x.tile.hidden && document.hasFocus() && (CC.layout > 1 || x.id === CC.active);
+T.event.listen('term', (e) => { const x = ccGet(e.payload.id); if (!x) return; x.term.write(e.payload.data); x.lastOut = Date.now(); if (!ccWatching(x)) { x.unseen = true; if (e.payload.data.includes('\x07')) x.bell = true; } });
+T.event.listen('term-exit', (e) => { const x = ccGet(e.payload.id); if (!x) return; x.live = false; x.term.write('\r\n\x1b[2m— the session ended —\x1b[0m\r\n'); drawTabs(); drawDock(); setTimeout(ccRefresh, 800); });
+// a session that was working and has gone quiet while you were not looking has finished, or is waiting for you: say so on the taskbar
+setInterval(() => { if (!CC.list.length) return; for (const x of CC.list) { const st = stateOf(x); if (x.was === 'working' && st !== 'working' && x.live && !ccWatching(x) && Date.now() - x.at.getTime() > 8000) { x.done = true; x.unseen = true; invoke('attention').catch(() => {}); } if (ccWatching(x) && st !== 'working') { x.unseen = false; x.done = false; x.bell = false; } x.was = stateOf(x) === 'working' ? 'working' : 'quiet'; } const sig = CC.list.map((x) => x.id + stateOf(x)).join('|') + CC.active + CC.layout + CC.launch; if (sig !== CC.sig) { drawDock(); drawTabs(); } }, 700);
+// the sessions that were running when Maestro closed come back by themselves
+async function ccRestore() { if (CC.restored) return; CC.restored = true; await ccRefresh(); const back = (CC.running || []).filter((r) => !r.attached).slice(0, 9); for (const r of back) await ccStart(r.kind === 'claude' ? 'claude' : 'ubuntu', { mode: 'attach', name: r.name, label: r.label || r.name, project: r.path.split('/').pop(), quiet: true }); if (back.length) say(`${back.length} session${back.length === 1 ? ' is' : 's are'} still running: see Console`, 'ok'); }
+function popView(k) { const name = k === 'projects' ? 'Projects' : tabName(k); invoke('pop_view', { tab: k, title: `${name} · ${D.project.name}` }).then(() => say(`${name} opened in its own window`, 'ok')).catch((e) => say(String(e), 'bad')); }
+function actions() {
+  const A = [];
+  const add = (title, sub, run) => A.push({ kind: 'action', title, sub, run, text: '' });
+  add('New Claude Code session', 'Start the agent, with a first message if you like', () => { setTab('claude'); ccLauncher(true); });
+  add('Continue the last Claude Code session', 'Pick up the most recent conversation here', () => { setTab('claude'); ccStart('claude', { mode: 'continue' }); });
+  add('New Ubuntu terminal', 'A shell in WSL, in this project', () => { setTab('claude'); ccStart('ubuntu'); });
+  add('New PowerShell terminal', 'Windows PowerShell, in this project', () => { setTab('claude'); ccStart('powershell'); });
+  add('New memory', 'Write a fact the agent keeps', () => newForm('memory'));
+  add('New skill', 'Write a procedure the agent can follow', () => newForm('skill'));
+  for (const [k, t] of TABS.slice(1)) add(`Go to ${t}`, 'Open that view', () => setTab(k));
+  for (const [k, t] of TABS) add(`Open ${t === 'All' ? 'the home screen' : t} in its own window`, 'A separate window you can move to another screen', () => popView(k));
+  PROJ.names.forEach((n, i) => { if (i !== PROJ.current) add(`Open ${n}`, 'Switch project', () => setProject(i)); });
+  add('Add or remove a project', 'The list of folders this app opens', () => { FOUND = null; setTab('projects'); });
+  add('Set up a starter harness', 'Instructions, rules, a work log and three skills, written only where they are missing', () => { PLAN = null; setTab('setup'); });
+  if (D.project.kit) add('Run the probe audit', 'About twenty seconds; shows which passes still count', () => { setTab('checks'); const b = $('[data-audit]'); if (b) b.click(); });
+  add('Read the files again', 'Reload everything from disk', () => reload().then(() => { drawList(); say('Read again from the files', 'ok'); }));
+  add('Start with Windows: turn on', 'Maestro waits in the tray until you press the key', () => invoke('autostart_set', { on: true }).then(() => say('Maestro will start with Windows', 'ok')));
+  add('Start with Windows: turn off', 'Stop starting Maestro at sign-in', () => invoke('autostart_set', { on: false }).then(() => say('Maestro will not start with Windows', 'ok')));
+  add('Hide', 'Back to what you were doing', () => invoke('hide'));
+  add('Minimize', 'Down to the taskbar', () => invoke('minimize'));
+  add(`Intro at start: turn ${localStorage.getItem('intro') === 'off' ? 'on' : 'off'}`, 'The boot sequence shown when Maestro starts', () => { const off = localStorage.getItem('intro') === 'off'; localStorage.setItem('intro', off ? 'on' : 'off'); say(off ? 'The intro will play at start' : 'The intro will not play', 'ok'); });
+  add('Replay the intro', 'Run the boot sequence now', () => boot(true));
+  add('Quit Maestro', 'Close the app and its tray icon', () => invoke('quit'));
+  return A;
+}
+function runAction(it) { $('#q').value = ''; sel = 0; search(); drawList(); Promise.resolve().then(it.run).catch((e) => say(String(e), 'bad')); }
+function drawHome() {
+  const L = D.ledger, st = L.status || {}, closed = ['shipped', 'verified', 'superseded', 'n/a'].reduce((n, k) => n + (st[k] || 0), 0), open = L.total - closed;
+  const noHead = Object.entries(L.repos || {}).filter(([, r]) => !r.head).map(([k]) => k);
+  const hot = (D.hot || []).map(loadFor).sort((a, b) => b.total - a.total), over = hot.filter((h) => h.over), P = D.probes;
+  const every = D.sizes.projClaude + D.sizes.userClaude + D.sizes.memoryIndex;
+  // what needs a decision, worst first
+  const N = [];
+  if (noHead.length && open) N.push(['bad', 'Blocked', `No live commit is recorded for ${noHead.join(', ')}`, `Rows in those repos cannot close until someone says which commit is running. ${num(open)} of ${num(L.total)} are open.`, 'ship']);
+  if (over.length) N.push(['bad', 'Over limit', `Editing ${hot[0].file.split('/').pop()} loads ${kk(hot[0].total)} of rules against a limit of ${kk(D.limit)}`, `${over.length} of your ${hot.length} busiest files are over. Past the limit, rules get skipped.`, 'rule']);
+  if (P && P.registered && P.current < P.registered) N.push(['warn', 'Unproven', `${P.current} of ${P.registered} checks have a pass that still counts`, `${P.stale} passed before the files they guard changed; ${P.never_run} have no recorded pass.`, 'checks']);
+  if ((st.uncommitted || 0) > 0) N.push(['warn', 'Loose', `${st.uncommitted} pieces of work are recorded as not committed`, 'Some are old words on old rows; the rest exist only in a working tree.', 'ship']);
+  if (D.sessions.live > 1) N.push(['warn', 'Open', `${D.sessions.live} sessions are live or ended without a record`, `${D.sessions.abandoned} older ones were left for over 48 hours.`, 'sessions']);
+  if (D.project.kit && D.sizes.projClaude > 14000) N.push(['warn', 'Tight', `${D.project.instructions} is ${num(D.sizes.projClaude)} of 15,000 characters`, 'The next headline may not fit.', 'work']);
+  if (D.project.bare) N.push(['warn', 'No harness', 'This project has no instructions, rules or skills yet', 'Set up a starter in one step: an instructions file, a rules file, a work log and three skills. You see every file before it is written.', 'setup']);
+  // ledger by stage
+  const stage = { uncommitted: (st.uncommitted || 0) + (st.mixed || 0) + (st.unknown || 0) + (st.pending || 0), committed: st.committed || 0, pushed: st.pushed || 0, deployed: st.deployed || 0, closed };
+  // work per day, last 60 days
+  const days = []; const today = new Date(); const per = {}; for (const e of D.log) per[e.date] = (per[e.date] || 0) + 1;
+  for (let i = 59; i >= 0; i--) { const d = new Date(today); d.setDate(today.getDate() - i); const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; days.push([key, per[key] || 0]); }
+  const maxDay = Math.max(1, ...days.map((d) => d[1])), sum60 = days.reduce((n, d) => n + d[1], 0);
+  const scale = Math.max(D.limit * 1.25, ...hot.map((h) => h.total), 1);
+  const meter = (name, total, title) => { const o = total > D.limit, near = !o && total > D.limit * 0.85; return `<div class="name" title="${esc(title)}">${esc(name)}</div><div class="mtrack" data-tip="${esc(title)}: ${num(total)} characters${o ? `, ${num(total - D.limit)} over the limit` : ''}"><i class="${o ? 'bad' : near ? 'warn' : ''}" data-w="${(total / scale * 100).toFixed(2)}"></i><u style="left:${(D.limit / scale * 100).toFixed(2)}%"></u></div><div class="v">${o ? GLYPH.bad : near ? GLYPH.warn : ''} ${kk(total)}</div>`; };
+  const read = (go, n, lab, sub) => `<button class="read" data-go="${go}"><span class="big">${num(n)}</span><span class="lab">${lab}</span><span class="sub">${esc(sub)}</span></button>`;
+  const types = {}; for (const m of D.memories) types[m.type || 'other'] = (types[m.type || 'other'] || 0) + 1;
+  $('#view').innerHTML = `<div class="deck">
+    ${CC.list.length ? `<section class="pane wide"><h2>Your sessions<span>${CC.list.filter((x) => x.live).length} open · click one to go to it</span></h2><div id="agents"></div></section>` : ''}
+    <section class="pane"><h2>Needs you<span>${N.length ? `${N.length} to decide` : 'nothing to decide'}</span></h2>
+      ${N.length ? N.map(([lvl, word, what, why, go]) => `<button class="need" data-go="${go}"><span class="st">${GLYPH[lvl]}${word}</span><span><b>${esc(what)}</b><span class="why">${esc(why)}</span></span><span class="go">open →</span></button>`).join('') : `<p class="lead" style="margin:0">${GLYPH.ok} Nothing here needs a decision.</p>`}
+    </section>
+    <section class="pane"><h2>Given to the agent before it edits<span>limit ${kk(D.limit)}</span></h2>
+      <div class="meters">${hot.map((h) => meter(h.file.split('/').pop(), h.total, h.file)).join('')}${meter('Every session', every, `${D.project.instructions}, your own CLAUDE.md and the memory index`)}</div>
+      ${hot.length ? '' : `<p class="dim" style="margin:8px 0 0">Name this project's busiest files as "hot" in ${esc(D.project.dir)}/maestro.json to see how much of the rules editing each one loads.</p>`}
+    </section>
+    <section class="pane"${L.total ? '' : ' hidden'}><h2>From written to confirmed on production<span>${num(L.total)} pieces of work</span></h2>
+      ${L.total ? `<div class="seg" role="img" aria-label="Work by how far it has got">${STAGES.map(([k, lab, c]) => stage[k] ? `<i style="background:var(${c})" data-w="${(stage[k] / L.total * 100).toFixed(2)}" data-tip="${lab}: ${num(stage[k])}"></i>` : '').join('')}</div>
+      <div class="legend">${STAGES.map(([k, lab, c]) => `<span><i style="background:var(${c})"></i>${lab} <b>${num(stage[k])}</b></span>`).join('')}</div>` : ''}
+    </section>
+    <section class="pane"${D.log.length ? '' : ' hidden'}><h2>Work recorded per day<span>last 60 days · busiest ${maxDay}</span></h2>
+      <div class="spark">${days.map(([k, n], i) => `<i class="${i === days.length - 1 ? 'now' : ''}" style="height:${Math.max(n ? 6 : 2, n / maxDay * 100)}%" data-tip="${k}: ${n} ${n === 1 ? 'entry' : 'entries'}"></i>`).join('')}</div>
+      <div class="axis"><span>${days[0][0]}</span><span>${days[29][0]}</span><span>today</span></div>
+    </section>
+    <section class="pane wide"><div class="reads">
+      ${read('memory', D.memories.length, 'Memories', Object.entries(types).map(([k, n]) => `${n} ${k}`).join(' · '))}
+      ${read('skill', (D.skills || []).length, 'Skills', (D.skills || []).slice(0, 3).map((k) => '/' + k.name).join(' '))}
+      ${read('rule', ITEMS.filter((i) => i.kind === 'rule').length, 'Rules', `in ${D.rules.length} file${D.rules.length === 1 ? '' : 's'}`)}
+      ${(D.audits || []).length ? read('audit', D.audits.length, 'Audits', D.audits[0].date ? 'latest ' + D.audits[0].date : '') : ''}
+      ${read('hooks', (D.hooks || []).length, 'Hooks', `${(D.hooks || []).filter((h) => h.scope === 'project').length} from the project`)}
+      ${D.log.length ? read('work', D.log.length, 'Work entries', `${sum60} in the last 60 days`) : ''}
+    </div></section>
+  </div>
+  <p style="margin:16px 0 0"><label class="chk"><input type="checkbox" id="auto"> Start Maestro when Windows starts</label></p>`;
+  drawAgents();
+  requestAnimationFrame(() => requestAnimationFrame(() => document.querySelectorAll('[data-w]').forEach((el) => { el.style.width = el.dataset.w + '%'; })));
+  invoke('autostart_get').then((on) => { const c = $('#auto'); if (c) c.checked = !!on; }).catch(() => {});
+}
+const tbl = (heads, rows) => `<table><thead><tr>${heads.map((h) => `<th${h.n ? ' class="n"' : ''}>${esc(h.t ?? h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+async function drawShip() {
+  const v = $('#view'); const mine = PROJ.current;
+  if (!LEDGER) { v.innerHTML = `<h1>Ship</h1><p class="lead">Working out why each row is open (this reads the repos' history, a few seconds)…</p>`; try { const L = await invoke('ledger'); if (PROJ.current !== mine) return; LEDGER = L; } catch (e) { v.innerHTML = `<h1>Ship</h1><p class="bad">${esc(String(e))}</p>`; return; } if (tab !== 'ship') return; }
+  const L = LEDGER, q = $('#q').value.trim().toLowerCase(); const rows = L.rows.filter((r) => !q || (r.what + ' ' + r.commits + ' ' + r.id + ' ' + r.why + ' ' + r.repo).toLowerCase().includes(q));
+  const ready = L.why['ready to close'] || 0;
+  v.innerHTML = `<h1>Ship</h1><p class="lead">${num(L.open)} of ${num(L.total)} things are not confirmed on production. A row closes when production runs a commit that contains it: record the live commit for a repo and every row at or below it closes.</p>
+  ${tbl(['Repo', 'Live commit on record', 'Checked out here', { t: 'Rows waiting on it', n: 1 }, 'Record the live commit'], L.repos.map((r) => `<tr><td>${esc(r.name)}</td><td>${r.head ? `<code>${esc(r.head)}</code> <span class="dim">${esc(String(r.at).slice(0, 10))}</span>` : '<span class="bad">none</span>'}</td><td><code>${esc(r.local || '')}</code></td><td class="n">${r.stuck ? num(r.stuck) : ''}</td><td><span class="row" data-repo="${esc(r.name)}"><input class="in" size="12" placeholder="commit id" aria-label="Commit id for ${esc(r.name)}"><button class="act" data-mark>Mark as live</button></span></td></tr>`))}
+  <p class="dim" style="margin-top:8px">Only mark a commit you know is running. The commit checked out here is not proof of what is deployed.</p>
+  <h3 class="sec">Why rows are open</h3>${tbl(['Reason', { t: 'Rows', n: 1 }], Object.entries(L.why).sort((a, b) => b[1] - a[1]).map(([w, n]) => `<tr><td>${esc(w)}${w === 'ready to close' ? ` <button class="act" data-close>Close these ${ready}</button>` : ''}</td><td class="n">${num(n)}</td></tr>`))}
+  <h3 class="sec">${q ? `${num(rows.length)} rows match` : 'The newest open rows'}</h3>${tbl(['Row', 'Date', 'What', 'Repo', 'Commits', 'Status', 'Open because'], rows.slice(0, 60).map((r) => `<tr><td class="k">${esc(r.id)}</td><td class="k">${esc(r.date.slice(5))}</td><td>${esc(r.what)}</td><td class="k">${esc(r.repo)}</td><td class="k"><code>${esc(r.commits)}</code></td><td class="k">${esc(r.status)}</td><td class="dim">${esc(r.why)}</td></tr>`))}`;
+}
+function drawSessions() {
+  const R = D.sessions.recent || [];
+  $('#view').innerHTML = `<h1>Sessions</h1><p class="lead">Every session leaves a draft of what was asked and which files changed. A live one is running now, or ended without being recorded. ${D.sessions.drafts} drafts are kept and ${D.sessions.abandoned} were left for over 48 hours.</p>
+  ${tbl(['Session', 'Last update', 'State', { t: 'Files', n: 1 }, 'First thing asked', ''], R.map((s) => `<tr><td class="k"><code>${esc(s.id.slice(0, 8))}</code></td><td class="k">${esc(String(s.up).slice(0, 16).replace('T', ' '))}</td><td class="k ${s.state === 'live' ? 'warn' : s.state === 'abandoned' ? 'bad' : ''}">${s.state}</td><td class="n">${s.files || ''}</td><td>${esc(s.ask)}</td><td class="k">${s.state === 'live' ? `<button class="act" data-end="${esc(s.id)}">Mark ended</button>` : ''}</td></tr>`))}
+  <p class="dim" style="margin-top:8px">Mark one ended only when its work is recorded or given up. A session still running shows as live again on its next turn.</p>`;
+}
+function drawChecks() {
+  const P = D.probes, q = $('#q').value.trim().toLowerCase(), reg = (D.registry || []).filter((p) => !q || (p.name + ' ' + p.area).toLowerCase().includes(q));
+  const state = (p) => !p.last ? ['never recorded', 'dim'] : AUDIT ? (AUDIT.has(p.name) ? [AUDIT.get(p.name), 'warn'] : ['nothing it guards has changed since', 'ok']) : ['passed; run the audit to see if it still counts', 'dim'];
+  reg.sort((a, b) => String(b.last || '').localeCompare(String(a.last || '')));
+  $('#view').innerHTML = `<h1>Checks</h1><p class="lead">${P ? `${P.current} of ${P.registered} probes have a pass that still counts; ${P.stale} passed before a file they guard changed and ${P.never_run} have no recorded pass (audit of ${esc(P.at)}).` : `${reg.length} probes are registered. No audit is on record.`} A probe named in a log entry's evidence gets its pass recorded.</p>
+  <div class="row" style="margin-bottom:12px"><button class="act" data-audit>${AUDIT ? 'Run the audit again' : 'Run the audit'}</button><span class="dim">About twenty seconds: it compares every pass with the files that probe guards.</span></div>
+  ${tbl(['Probe', 'Area', { t: 'Files guarded', n: 1 }, 'Last pass', 'What it is worth'], reg.slice(0, 80).map((p) => { const [w, c] = state(p); return `<tr><td><code>${esc(p.name)}</code></td><td class="k">${esc(p.area)}</td><td class="n">${p.guards}</td><td class="k">${esc(p.last || 'none')}</td><td class="${c}">${esc(w)}</td></tr>`; }))}${reg.length > 80 ? `<p class="dim">Showing 80 of ${reg.length}. Type to filter.</p>` : ''}`;
+}
+function moveForm() {
+  const it = hits[sel]; if (!it || it.kind !== 'rule') return;
+  const secs = (f) => D.rules.find((r) => r.f === f).sections.map((x, k) => `<option value="${k}">${esc(x.head.replace(/\s*\(log:.*$/, '').slice(0, 56))}</option>`).join('') + '<option value="new">New section…</option>';
+  $('#slot').innerHTML = `<div class="row" id="mv"><span class="dim">Move to</span><select class="in" id="mv-f">${D.rules.map((r) => `<option${r.f === it.ref.f ? ' selected' : ''}>${esc(r.f)}</option>`).join('')}</select><select class="in" id="mv-s">${secs(it.ref.f)}</select><input class="in" id="mv-n" placeholder="New section name" hidden><button class="act go" data-domove>Move</button><button class="act" data-clear>Cancel</button></div>`;
+  $('#mv-f').onchange = () => { $('#mv-s').innerHTML = secs($('#mv-f').value); $('#mv-n').hidden = $('#mv-s').value !== 'new'; };
+  $('#mv-s').onchange = () => { $('#mv-n').hidden = $('#mv-s').value !== 'new'; if (!$('#mv-n').hidden) $('#mv-n').focus(); };
+  editing = { form: true };
+}
+async function after(msg) { const keepSel = sel; editing = null; await reload(); sel = Math.min(keepSel, Math.max(0, hits.length - 1)); drawList(); say(msg, 'ok'); $('#q').focus(); }
+async function startEdit() {
+  const it = hits[sel]; if (!it || it.kind === 'work' || it.kind === 'audit' || PAGES[tab]) return;
+  const raw = it.kind === 'memory' ? await invoke('read_memory', { f: it.m.f }) : it.kind === 'skill' ? await invoke('read_skill', { scope: it.sk.scope, name: it.sk.name }) : it.text;
+  editing = { it, was: raw };
+  $('#view').innerHTML = `<h1>${esc(it.kind === 'memory' ? it.m.name : it.kind === 'skill' ? '/' + it.sk.name : it.sub)}</h1><div class="meta"><button class="act go" data-save>Save</button><button class="act" data-cancel>Cancel</button><span><kbd>Ctrl</kbd> <kbd>S</kbd> saves · <kbd>Esc</kbd> cancels · the first copy of the day is kept in .claude/archive</span></div><textarea id="ed" spellcheck="false"></textarea>`;
+  $('#ed').value = raw; $('#ed').focus();
+}
+async function save() {
+  if (!editing || !editing.it) return; const { it, was } = editing; const text = $('#ed').value;
+  try {
+    if (it.kind === 'memory') await invoke('save_memory', { f: it.m.f, text }); else if (it.kind === 'skill') await invoke('save_skill', { scope: it.sk.scope, name: it.sk.name, text }); else await invoke('save_law', { f: it.ref.f, s: it.ref.s, i: it.ref.i, was, text });
+    const keep = keyOf(it); editing = null; await reload(); const again = hits.findIndex((h) => keyOf(h) === keep); sel = again < 0 ? 0 : again; drawList(); say('Saved', 'ok'); $('#q').focus();
+  } catch (e) { say(String(e), 'bad'); }
+}
+function newForm(kind) {
+  if (kind !== 'memory' && kind !== 'skill') return; if (tab !== kind) { tab = kind; drawTabs(); search(); drawList(); }
+  editing = { form: true, create: kind }; document.querySelectorAll('.item').forEach((b) => b.setAttribute('aria-selected', 'false'));
+  $('#view').innerHTML = kind === 'memory' ? `<h1>New memory</h1><p class="lead">One fact in its own file. It gets a line in the index the agent reads at the start of every session, so the summary decides when it is recalled.</p>
+    <div class="form"><label for="n-name">Name</label><input class="in" id="n-name" placeholder="scan-time-override" autocomplete="off" spellcheck="false">
+    <label for="n-kind">Kind</label><select class="in" id="n-kind"><option value="feedback">feedback: how you want the work done</option><option value="project">project: a goal or constraint the code does not show</option><option value="reference">reference: where something lives</option><option value="user">user: who you are and what you prefer</option></select>
+    <label for="n-desc">Summary</label><input class="in" id="n-desc" placeholder="One line: what this is and when it matters" autocomplete="off">
+    <label for="n-body">The fact</label><textarea id="n-body" spellcheck="false" placeholder="State it plainly. For feedback or a project fact, add why it holds and how to apply it."></textarea>
+    <span></span><div class="row"><button class="act go" data-create>Create</button><button class="act" data-cancel>Cancel</button><span class="dim"><kbd>Ctrl</kbd> <kbd>S</kbd> creates</span></div></div>`
+  : `<h1>New skill</h1><p class="lead">A procedure the agent follows when it fits or when you type its name. The description is how it gets picked, so say when to use it.</p>
+    <div class="form"><label for="n-name">Name</label><input class="in" id="n-name" placeholder="release-notes" autocomplete="off" spellcheck="false">
+    <label for="n-kind">Where</label><select class="in" id="n-kind"><option value="you">yours: available in every project</option><option value="project">this project only</option></select>
+    <label for="n-desc">When to use it</label><input class="in" id="n-desc" placeholder="Write the release notes for a deploy from the log entries since the last one" autocomplete="off">
+    <label for="n-body">Steps</label><textarea id="n-body" spellcheck="false" placeholder="What to do, in order. Name the commands and the files."></textarea>
+    <span></span><div class="row"><button class="act go" data-create>Create</button><button class="act" data-cancel>Cancel</button><span class="dim"><kbd>Ctrl</kbd> <kbd>S</kbd> creates</span></div></div>`;
+  $('#n-name').focus();
+}
+async function create() {
+  if (!editing || !editing.create) return; const kind = editing.create, name = $('#n-name').value, description = $('#n-desc').value, body = $('#n-body').value;
+  try {
+    const made = kind === 'memory' ? await invoke('new_memory', { name, kind: $('#n-kind').value, description, body }) : await invoke('new_skill', { scope: $('#n-kind').value, name, description, body });
+    editing = null; $('#q').value = ''; await reload(); const at = hits.findIndex((h) => kind === 'memory' ? h.kind === 'memory' && h.m.f === made : h.kind === 'skill' && h.sk.name === made); sel = at < 0 ? 0 : at; drawList(); say(kind === 'memory' ? 'Memory created and added to the index' : `Skill /${made} created`, 'ok'); $('#q').focus();
+  } catch (e) { say(String(e), 'bad'); }
+}
+function drawHooks() {
+  const q = $('#q').value.trim().toLowerCase(), H = (D.hooks || []).filter((h) => !q || (h.when + ' ' + h.on + ' ' + h.runs).toLowerCase().includes(q));
+  $('#view').innerHTML = `<h1>Hooks</h1><p class="lead">Commands that run on their own at fixed moments: when a session starts, before or after the agent edits a file, when it stops. They are set in <code>settings.json</code>, yours for every project and the project's own. This screen shows them; it does not change them yet.</p>
+  ${tbl(['When', 'On', 'Runs', 'Set by'], H.map((h) => `<tr><td class="k">${esc(h.when)}</td><td class="k">${esc(h.on)}</td><td style="overflow-wrap:anywhere"><code>${esc(h.runs.length > 170 ? h.runs.slice(0, 170) + '…' : h.runs)}</code></td><td class="k">${esc(h.scope === 'you' ? 'you' : 'the project')}</td></tr>`))}`;
+}
+let loadSeq = 0;
+async function reload() {
+  const my = ++loadSeq; const d = await invoke('load'); if (my !== loadSeq) return; // a newer read is on its way: this one is stale
+  D = d; if (D.empty) tab = 'projects'; else if (tab === 'setup' && !D.project.bare && !PLAN) tab = 'all'; fitTabs(); build(); drawTabs(); search();
+  const at = PROJ.names.indexOf(D.project.name); const pj = $('#pj'); if (pj && at >= 0 && Number(pj.value) !== at) { pj.value = String(at); PROJ.current = at; } // the name shown is always the project whose files are on screen
+}
+async function drawProjects() { PROJ = await invoke('projects'); $('#proj').innerHTML = `<select id="pj" aria-label="Project">${projOptions(PROJ.current)}<option value="manage">Add, remove or favourite a project…</option></select>`; }
+let FOUND = null;
+const isFav = (i) => !!(PROJ.favs && PROJ.favs[i]);
+const projOrder = () => { const all = PROJ.names.map((n, i) => i); const byName = (a, b) => PROJ.names[a].localeCompare(PROJ.names[b]); return { favs: all.filter(isFav).sort(byName), rest: all.filter((i) => !isFav(i)).sort(byName) }; };
+function projOptions(selected) { const { favs, rest } = projOrder(); const opt = (i) => `<option value="${i}"${i === selected ? ' selected' : ''}>${esc(PROJ.names[i])}</option>`; return favs.length ? `<optgroup label="Favourites">${favs.map(opt).join('')}</optgroup><optgroup label="All projects">${rest.map(opt).join('')}</optgroup>` : rest.map(opt).join(''); }
+function drawProjectsPage() {
+  const f = FOUND, e = f && f.entry, x = f && f.found, first = !PROJ.names.length;
+  const facts = !f ? [] : [
+    `Claude Code runs ${e.runs === 'windows' ? 'on Windows' : 'inside WSL (' + e.distro + ')'} for this folder${x.worked ? ' and has worked in it before' : ''}`,
+    x.claude ? `Its harness is kept in ${x.dir}` : 'It has no .claude or .agents folder yet',
+    x.instructions ? `${x.instructionsName} is there` : 'No CLAUDE.md or AGENTS.md',
+    [x.rules ? `${x.rules} rules file${x.rules === 1 ? '' : 's'}` : 'no rules', x.skills ? `${x.skills} skill${x.skills === 1 ? '' : 's'}` : 'no skills', x.log ? `${x.log} log entries` : 'no work log'].join(' · ').replace(/^./, (c) => c.toUpperCase()),
+    x.memory ? `${x.memories} memories` : 'No memory folder yet (it appears the first time a memory is saved)',
+    x.kit ? 'A context kit is set up here, so Ship, Sessions and Checks fill in' : '',
+    !x.instructions && !x.rules && !x.skills ? 'Nothing is set up: after adding it, Maestro offers a starter harness and shows every file before writing it' : '',
+  ].filter(Boolean);
+  const both = f && f.choices && f.choices.wsl && f.choices.windows;
+  const M = MACHINE; const have = !M ? '' : [M.distros.length ? `WSL with ${M.distros.join(', ')}` : 'no WSL', M.windowsClaudeExe ? 'Claude Code on Windows' : M.windowsClaude ? 'a Claude folder on Windows' : ''].filter(Boolean).join(' · ');
+  if (first && !M) invoke('machine').then((m) => { MACHINE = m; if (tab === 'projects' && !FOUND) drawProjectsPage(); }).catch(() => {});
+  $('#view').innerHTML = (first ? `<h1>Welcome to Maestro</h1><p class="lead">Maestro shows what your coding agent is given in a project (its instructions, rules, skills, memory and hooks) and runs your Claude Code sessions side by side. It reads the files that are already in the project; nothing is uploaded and nothing is changed until you say so.</p>
+  <p class="lead">Start by pointing it at a project folder. It works with a project that already has a harness (<code>CLAUDE.md</code> and <code>.claude/</code>, or <code>AGENTS.md</code> and <code>.agents/</code>), and for one that has nothing yet it can write a starter.</p>${have ? `<p class="dim">Found on this machine: ${esc(have)}.</p>` : ''}`
+  : `<h1>Projects</h1><p class="lead">The folders this app can open. Star the ones you use most: favourites come first in every project picker and get one-click start buttons in the Console. Removing a project only takes it off this list; nothing in its folder is touched.</p>
+  ${tbl(['', 'Project', 'Folder', ''], [...projOrder().favs, ...projOrder().rest].map((i) => [PROJ.names[i], i]).map(([n, i]) => `<tr><td class="k"><button class="star${isFav(i) ? ' on' : ''}" data-fav="${i}" title="${isFav(i) ? 'Take off the favourites' : 'Make it a favourite: favourites come first in every project list'}" aria-pressed="${isFav(i)}">${isFav(i) ? '★' : '☆'}</button></td><td>${esc(n)}${i === PROJ.current ? ' <span class="dim">open now</span>' : ''}</td><td class="dim"><code>${esc(PROJ.roots[i])}</code></td><td class="k">${i === PROJ.current ? '' : `<button class="act" data-open="${i}">Open</button> `}${PROJ.names.length > 1 ? `<button class="act" data-rm="${i}">Remove</button>` : ''}</td></tr>`))}`) + `
+  <h3 class="sec">${first ? 'Your first project' : 'Add a project'}</h3>
+  <div class="form"><label for="p-folder">Folder</label><div class="row" style="flex-wrap:nowrap"><input class="in" id="p-folder" placeholder="D:\\projects\\my-site   or   /mnt/d/projects/my-site   or   /home/me/my-site" autocomplete="off" spellcheck="false" value="${esc(f ? f.typed : '')}"><button class="act" data-browse>Browse…</button><button class="act" data-look>Check</button></div>
+  ${f ? `<label for="p-name">Name</label><input class="in" id="p-name" value="${esc(e.name)}" autocomplete="off" spellcheck="false">
+  ${both ? `<label for="p-runs">Agent runs</label><select class="in" id="p-runs"><option value="wsl"${e.runs === 'wsl' ? ' selected' : ''}>inside WSL (${esc(f.choices.distro)})</option><option value="windows"${e.runs === 'windows' ? ' selected' : ''}>on Windows</option></select>` : ''}
+  <label>Found</label><div>${facts.map((t) => `<div>${esc(t)}</div>`).join('')}<div class="dim" style="margin-top:6px">Memory is read from <code>${esc(e.memoryDir)}</code></div></div>
+  <span></span><div class="row">${f.already ? '<span class="warn">This folder is already in the list.</span>' : '<button class="act go" data-addproj>Add and open</button>'}</div>` : `<span></span><span class="dim">Pick the folder; the rest is worked out from it, and you see what was found before anything is added.</span>`}</div>`;
+}
+let MACHINE = null, PLAN = null;
+// The starter harness: what would be written, shown before anything is. Files that exist are never replaced.
+async function drawSetup() {
+  const v = $('#view');
+  if (!PLAN) { try { PLAN = await invoke('starter_plan', { layout: null }); } catch (e) { v.innerHTML = `<h1>Set up a harness</h1><p class="bad">${esc(String(e))}</p>`; return; } if (tab !== 'setup') return; }
+  const P = PLAN, todo = P.files.filter((x) => !x.exists), open = P.open && P.files.find((x) => x.path === P.open);
+  v.innerHTML = `<h1>Set up a harness in ${esc(D.project.name)}</h1><p class="lead">A harness is what the agent reads before it works: instructions for the project, rules it must keep, a log of what was done and why, and skills (procedures it can follow). This writes a small one you can grow. Only files that are not there yet are written; nothing is replaced.</p>
+  <div class="row" style="margin-bottom:12px"><span class="dim">Layout</span><button class="act${P.layout === 'claude' ? ' go' : ''}" data-layout="claude">CLAUDE.md and .claude/</button><button class="act${P.layout === 'agents' ? ' go' : ''}" data-layout="agents">AGENTS.md and .agents/</button><span class="dim">${P.layout === 'agents' ? 'For projects shared with other agents. Claude Code reads it through a one-line CLAUDE.md.' : 'What Claude Code reads on its own.'}</span></div>
+  ${tbl(['File', 'What it is', ''], P.files.map((x) => `<tr><td><button class="act" data-peek="${esc(x.path)}" title="Read it first"><code>${esc(x.path)}</code></button></td><td class="dim">${esc(/SKILL\.md$/.test(x.path) ? `the /${x.path.split('/').slice(-2)[0]} skill` : /\/rules\//.test(x.path) ? 'rules: how the log and the rules are kept' : /\/log\//.test(x.path) ? 'the first log entry' : x.text.startsWith('@') ? 'points Claude Code at AGENTS.md' : 'instructions: headlines, a roadmap, commands')}</td><td class="k ${x.exists ? 'dim' : 'ok'}">${x.exists ? 'already there, stays as it is' : 'will be written'}</td></tr>`))}
+  <div class="row" style="margin-top:12px">${todo.length ? `<button class="act go" data-starter>Write ${todo.length} file${todo.length === 1 ? '' : 's'}</button>` : '<span class="dim">Everything is already there.</span>'}<span class="dim">in <code>${esc(P.root)}</code></span></div>
+  ${open ? `<h3 class="sec">${esc(open.path)}</h3><div class="text">${rich(open.text)}</div>` : ''}`;
+}
+async function look(folder, runs) { try { const v = await invoke('inspect_project', { folder, runs: runs || null }); FOUND = { ...v, typed: folder }; drawProjectsPage(); if ($('#p-name')) $('#p-name').focus(); } catch (e) { say(String(e), 'bad'); } }
+let projSeq = 0;
+async function setProject(i) {
+  const my = ++projSeq; // picking twice quickly: only the last pick is shown
+  try { await invoke('set_project', { i }); if (my !== projSeq) return; gitReset(); LEDGER = null; AUDIT = null; PLAN = null; sel = 0; editing = null; await drawProjects(); await reload(); if (my !== projSeq) return; drawList(); say(`Opened ${D.project.name}`, 'ok'); } catch (e) { say(String(e), 'bad'); }
+  $('#q').focus();
+}
+document.addEventListener('auxclick', (e) => { const vt = e.button === 1 && e.target.closest && e.target.closest('[data-tab]'); if (vt) { e.preventDefault(); return popView(vt.dataset.tab); } const b = e.button === 1 && e.target.closest && e.target.closest('.stab'); if (b) { e.preventDefault(); ccCloseTab(b.dataset.csel); } });
+document.addEventListener('change', (e) => { if (e.target.id === 'cproj' || e.target.id === 'cproj2') { CC.proj = Number(e.target.value); drawDock(); if (CC.launch || !CC.list.length) { drawLauncher(); const ta = $('#cprompt'); if (ta) ta.focus(); } return; }
+  if (e.target.id === 'grepo') { const name = e.target.value; const repos = G.repos; gitReset(); G.repos = repos; G.repo = name; drawTabs(); return drawGit(); }
+  if (e.target.id === 'p-runs') return look(FOUND.typed, e.target.value);
+  if (e.target.id === 'pj') { if (e.target.value === 'manage') { e.target.value = String(PROJ.current); FOUND = null; return setTab('projects'); } setProject(Number(e.target.value)); } if (e.target.id === 'auto') invoke('autostart_set', { on: e.target.checked }).then((on) => { e.target.checked = !!on; say(on ? 'Maestro will start with Windows' : 'Maestro will not start with Windows', 'ok'); }).catch((err) => { e.target.checked = !e.target.checked; say(String(err), 'bad'); }); });
+function setTab(k) { if (D.empty) k = 'projects'; tab = k; sel = 0; fitTabs(); nameView(); drawTabs(); search(); drawList(); $('#q').focus(); }
+
+$('#q').addEventListener('input', () => { if (tab === 'git' && !$('#q').value.trimStart().startsWith('>') && G.status && $('.gbody')) return gitDraw(true); sel = 0; search(); drawList(); });
+document.addEventListener('click', (e) => {
+  const t = e.target; const tb = t.closest('[data-tab]'); if (tb) return setTab(tb.dataset.tab);
+  const go = t.closest('[data-go]'); if (go) return setTab(go.dataset.go);
+  if (t.closest('[data-new]')) return newForm(t.closest('[data-new]').dataset.new); // before the list rows: it is one of them
+  const item = t.closest('.item'); if (item) { sel = Number(item.dataset.i); drawList(); $('#q').focus(); return; }
+  if (t.closest('[data-create]')) return create();
+  if (t.closest('[data-edit]')) return startEdit(); if (t.closest('[data-save]')) return save(); if (t.closest('[data-cancel]')) { drawView(); $('#q').focus(); return; }
+  if (t.closest('[data-cclose]')) { e.stopPropagation(); return ccCloseTab(t.closest('[data-cclose]').dataset.cclose); }
+  if (t.closest('[data-cend]')) { e.stopPropagation(); return ccEnd(t.closest('[data-cend]').dataset.cend, true); }
+  if (t.closest('[data-cleave]')) return ccEnd(t.closest('[data-cleave]').dataset.cleave, false);
+  if (t.closest('[data-cpop]')) return ccPop(t.closest('[data-cpop]').dataset.cpop);
+  if (t.closest('[data-ckill]')) { e.stopPropagation(); const n = t.closest('[data-ckill]').dataset.ckill; return invoke('term_close', { id: '', name: n, end: true }).then(ccRefresh).catch((err) => say(String(err), 'bad')); }
+  if (t.closest('[data-cattall]')) { e.stopPropagation(); const here = new Set(CC.list.map((s) => s.name)); return (async () => { for (const r of (CC.running || []).filter((r) => !here.has(r.name))) await ccStart(r.kind === 'claude' ? 'claude' : 'ubuntu', { mode: 'attach', name: r.name, label: r.label || r.name, project: r.path.split('/').pop(), quiet: true }); ccLauncher(false); })(); }
+  if (t.closest('[data-catt]')) { const b = t.closest('[data-catt]'); return ccStart(b.dataset.kind === 'claude' ? 'claude' : 'ubuntu', { mode: 'attach', name: b.dataset.catt, label: b.dataset.label || b.dataset.catt, project: (b.dataset.path || '').split('/').pop() }); }
+  if (t.closest('[data-agent]')) { const id = t.closest('[data-agent]').dataset.agent; setTab('claude'); return ccShow(id); }
+  if (t.closest('[data-csel]')) return ccShow(t.closest('[data-csel]').dataset.csel);
+  if (t.closest('[data-clay]')) return ccSetLayout(Number(t.closest('[data-clay]').dataset.clay));
+  if (t.closest('[data-claunch-close]')) return ccLauncher(false);
+  if (t.closest('[data-claunch]')) return ccLauncher(!CC.launch);
+  if (t.closest('[data-cterm]')) { const b = t.closest('[data-cterm]'); return ccStart(b.dataset.cterm, b.dataset.p != null ? { proj: Number(b.dataset.p) } : {}); }
+  if (t.closest('[data-cgo]')) return ccStart('claude', { prompt: $('#cprompt').value });
+  if (t.closest('[data-ccont]')) return ccStart('claude', { mode: 'continue' });
+  if (t.closest('[data-cres]')) { const b = t.closest('[data-cres]'); return ccStart('claude', { mode: 'resume', session: b.dataset.cres, label: $('.t', b).textContent.slice(0, 60) }); }
+  if (t.closest('.tile') && !t.closest('button')) { const id = t.closest('.tile').dataset.id; if (id !== CC.active) return ccShow(id); }
+  if (t.closest('[data-ask]')) { const it = hits[sel]; if (!it) return; return askClaude(it.kind === 'memory' ? `About the memory "${it.m.name}" (memory file ${it.m.f}): ` : it.kind === 'rule' ? `About this rule in ${D.project.dir}/rules/${it.ref.f}, section "${it.sub.split(' › ')[1] || ''}": "${plain(it.text.slice(2, 160))}…"\n\n` : ''); }
+  if (t.closest('[data-gs]')) { G.sub = t.closest('[data-gs]').dataset.gs; G.sel = null; $('#q').value = ''; gitDraw(false); $('#q').focus(); /* a filter typed for files says nothing about commits */ if (G.sub === 'history' && !G.log) invoke('git_log', { repo: G.repo, skip: 0 }).then((l) => { G.log = l; if (tab === 'git') gitDraw(true); }).catch((err) => say(String(err), 'bad')); if (G.sub === 'tree' && !G.tree['']) gitTreeOpen(''); return; }
+  if (t.closest('[data-gf]')) { const b = t.closest('[data-gf]'); return gitShowFile(b.dataset.gf, b.dataset.gk); }
+  if (t.closest('[data-gcf]')) return gitShowCommit(G.commit.sha, t.closest('[data-gcf]').dataset.gcf);
+  if (t.closest('[data-gc]')) return gitShowCommit(t.closest('[data-gc]').dataset.gc, null);
+  if (t.closest('[data-gd]')) { const d = t.closest('[data-gd]').dataset.gd; if (G.open.has(d)) { G.open.delete(d); return gitDraw(true); } G.open.add(d); return gitTreeOpen(d); }
+  if (t.closest('[data-gt]')) return gitShowTreeFile(t.closest('[data-gt]').dataset.gt);
+  if (t.closest('[data-popview]')) return popView(tab);
+  if (t.closest('[data-pin]')) { const b = t.closest('[data-pin]'); const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on)); try { localStorage.setItem('pin', on ? '1' : '0'); } catch (_) {} invoke('set_on_top', { on }); return say(on ? 'Maestro stays above other windows' : 'Other windows can cover Maestro again', 'ok'); }
+  if (t.closest('[data-max]')) return invoke('toggle_max');
+  if (t.closest('[data-min]')) { G.seen = false; return invoke('minimize'); } if (t.closest('[data-quit]')) { const b = t.closest('[data-quit]'); const ps = CC.list.filter((x) => x.live && !x.keeps).length; if (ps && !b.dataset.sure) { b.dataset.sure = '1'; setTimeout(() => { delete b.dataset.sure; }, 6000); return say(`Closing ends ${ps} session${ps === 1 ? '' : 's'} that run${ps === 1 ? 's' : ''} on Windows; sessions inside WSL keep running. Press × again to close.`, 'bad'); } return invoke('quit'); }
+  if (t.closest('[data-fav]')) { const i = Number(t.closest('[data-fav]').dataset.fav); return invoke('set_favorite', { i, on: !isFav(i) }).then(async () => { await drawProjects(); drawProjectsPage(); drawDock(); }).catch((err) => say(String(err), 'bad')); }
+  if (t.closest('[data-browse]')) return invoke('pick_folder').then((f) => { if (f) look(f); }).catch((err) => say(String(err), 'bad'));
+  if (t.closest('[data-look]')) return look($('#p-folder').value);
+  if (t.closest('[data-addproj]')) return invoke('add_project', { folder: FOUND.typed, name: $('#p-name').value, runs: FOUND.entry.runs }).then(async (at) => { FOUND = null; LEDGER = null; AUDIT = null; PLAN = null; gitReset(); tab = 'all'; await drawProjects(); await reload(); if (D.project.bare) tab = 'setup'; fitTabs(); nameView(); drawTabs(); drawList(); say(`Added and opened ${PROJ.names[at]}`, 'ok'); $('#q').focus(); }).catch((err) => say(String(err), 'bad'));
+  if (t.closest('[data-layout]')) return invoke('starter_plan', { layout: t.closest('[data-layout]').dataset.layout }).then((pl) => { PLAN = pl; drawSetup(); }).catch((err) => say(String(err), 'bad'));
+  if (t.closest('[data-peek]')) { PLAN.open = PLAN.open === t.closest('[data-peek]').dataset.peek ? null : t.closest('[data-peek]').dataset.peek; return drawSetup(); }
+  if (t.closest('[data-starter]')) { const b = t.closest('[data-starter]'); b.disabled = true; return invoke('starter_apply', { layout: PLAN.layout }).then(async (r) => { PLAN = null; tab = 'all'; await reload(); nameView(); drawList(); say(`Wrote ${r.written.length} file${r.written.length === 1 ? '' : 's'}${r.kept.length ? `; ${r.kept.length} already there were left alone` : ''}`, 'ok'); }).catch((err) => { b.disabled = false; say(String(err), 'bad'); }); }
+  if (t.closest('[data-open]')) { tab = 'all'; return setProject(Number(t.closest('[data-open]').dataset.open)); }
+  if (t.closest('[data-rm]')) { const b = t.closest('[data-rm]'), i = Number(b.dataset.rm); if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = `Confirm: take ${PROJ.names[i]} off the list`; b.classList.add('go'); return; } return invoke('remove_project', { i }).then(async () => { LEDGER = null; AUDIT = null; await drawProjects(); await reload(); drawList(); say('Removed from the list; its files are untouched', 'ok'); }).catch((err) => say(String(err), 'bad')); }
+  if (t.closest('[data-move]')) return moveForm();
+  if (t.closest('[data-clear]')) { $('#slot').innerHTML = ''; editing = null; $('#q').focus(); return; }
+  if (t.closest('[data-retire]')) { $('#slot').innerHTML = `<div class="row"><span>Retire this rule? It leaves the file and is kept in <code>${esc(D.project.dir)}/archive/retired-laws.md</code>.</span><button class="act go" data-doretire>Retire</button><button class="act" data-clear>Cancel</button></div>`; editing = { form: true }; return; }
+  if (t.closest('[data-domove]')) { const it = hits[sel], isNew = $('#mv-s').value === 'new', name = $('#mv-n').value.trim(); if (isNew && !name) return say('Name the new section', 'bad'); const to = $('#mv-f').value; return invoke('move_law', { f: it.ref.f, s: it.ref.s, i: it.ref.i, was: it.text, to, toSection: isNew ? null : Number($('#mv-s').value), newSection: isNew ? name : null }).then(() => after(`Moved to ${to}`)).catch((err) => say(String(err), 'bad')); }
+  if (t.closest('[data-doretire]')) { const it = hits[sel]; return invoke('retire_law', { f: it.ref.f, s: it.ref.s, i: it.ref.i, was: it.text }).then(() => after('Retired; kept in the archive')).catch((err) => say(String(err), 'bad')); }
+  if (t.closest('[data-end]')) return invoke('end_session', { id: t.closest('[data-end]').dataset.end }).then(() => after('Marked ended')).catch((err) => say(String(err), 'bad'));
+  if (t.closest('[data-audit]')) { const b = t.closest('[data-audit]'); b.disabled = true; b.textContent = 'Running the audit…'; return invoke('audit').then(async (out) => { AUDIT = new Map(); let on = false; for (const ln of out.split('\n')) { if (/^pass stale/.test(ln)) { on = true; continue; } if (on && /^\S/.test(ln)) on = false; const m = on && ln.match(/^\s+(\S+): (.+)$/); if (m) AUDIT.set(m[1], m[2]); } await after('Audit done'); }).catch((err) => { say(String(err), 'bad'); drawList(); }); }
+  if (t.closest('[data-close]')) { const b = t.closest('[data-close]'); b.disabled = true; return invoke('close_rows').then(async (out) => { LEDGER = null; await after(out.trim().split('\n')[0] || 'Closed'); }).catch((err) => say(String(err), 'bad')); }
+  if (t.closest('[data-mark]')) {
+    const row = t.closest('[data-repo]'), repo = row.dataset.repo, sha = $('input', row).value.trim().toLowerCase(), b = t.closest('[data-mark]');
+    if (!/^[0-9a-f]{7,40}$/.test(sha)) return say('Type the commit id that is live (7 to 40 hex characters)', 'bad');
+    if (b.dataset.sure !== sha) { b.dataset.sure = sha; b.textContent = `Confirm: ${repo} runs ${sha.slice(0, 8)}`; b.classList.add('go'); return; }
+    b.disabled = true; b.textContent = 'Recording…';
+    return invoke('mark_live', { repo, sha }).then(async (out) => { LEDGER = null; const lines = out.trim().split('\n'); await after(lines.slice(0, 2).join(' · ') || 'Recorded'); }).catch((err) => { say(String(err), 'bad'); drawList(); });
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest && e.target.closest('.term')) return; // everything typed into a session goes to Claude Code, Esc and Tab included
+  if (tab === 'claude' && ccChord(e)) { e.preventDefault(); return; }
+  if (e.target.id === 'cprompt') { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return ccStart('claude', { prompt: e.target.value }); } if (e.key === 'Escape' && CC.list.length) { e.preventDefault(); return ccLauncher(false); } if (e.key !== 'Escape') return; }
+  if (e.key === 'Escape') { e.preventDefault(); if (editing) { const page = !!PAGES[tab]; editing = null; if (page) drawList(); else drawView(); $('#q').focus(); } else if ($('#q').value) { $('#q').value = ''; sel = 0; search(); drawList(); } else if (VIEW) { /* an own-window view stays where it is */ } else if (tab !== 'all') setTab('all'); else { G.seen = false; invoke('hide'); } return; }
+  if (e.ctrlKey && e.key.toLowerCase() === 's') { e.preventDefault(); return editing && editing.create ? create() : save(); }
+  if (e.ctrlKey && e.key.toLowerCase() === 'n') { e.preventDefault(); return newForm(tab === 'skill' ? 'skill' : 'memory'); }
+  if (e.ctrlKey && e.key.toLowerCase() === 'e') { e.preventDefault(); return startEdit(); }
+  if (e.key === 'Enter' && e.target.id === 'p-folder') { e.preventDefault(); return look(e.target.value); }
+  if (e.ctrlKey && e.key.toLowerCase() === 'r') { e.preventDefault(); return reload().then(() => { drawList(); say('Read again from the files', 'ok'); }); }
+  if (e.ctrlKey && e.key.toLowerCase() === 'q') { e.preventDefault(); return invoke('quit'); }
+  if (e.altKey && /^[1-9]$/.test(e.key) && TABS[Number(e.key) - 1]) { e.preventDefault(); return setTab(TABS[Number(e.key) - 1][0]); }
+  if (editing || (e.target.matches && e.target.matches('input.in, select.in, select, textarea'))) return;
+  if (e.key === 'Enter' && hits[sel] && hits[sel].kind === 'action') { e.preventDefault(); return runAction(hits[sel]); }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!hits.length) return; sel = Math.max(0, Math.min(hits.length - 1, sel + (e.key === 'ArrowDown' ? 1 : -1))); document.querySelectorAll('.item').forEach((b) => b.setAttribute('aria-selected', String(Number(b.dataset.i) === sel))); drawView(); return; }
+  if (e.key === 'Tab') { e.preventDefault(); const i = TABS.findIndex(([k]) => k === tab); return setTab(TABS[(i + (e.shiftKey ? TABS.length - 1 : 1)) % TABS.length][0]); }
+  if (document.activeElement !== $('#q') && (e.key.length === 1 || e.key === 'Backspace') && !e.ctrlKey && !e.altKey) $('#q').focus();
+});
+T.event.listen('hidden', () => { G.seen = false; });
+T.event.listen('shown', () => { G.seen = true; if (tab === 'git') gitCheck(true); const pn = $('#panel'); pn.classList.remove('in'); void pn.offsetWidth; pn.classList.add('in'); $('#q').focus(); $('#q').select(); if (editing) return; LEDGER = null; reload().then(drawList).catch(() => {}); });
+const POP = window.__POP || null; const VIEW = window.__VIEW || null;
+if (VIEW) { document.body.classList.add('view'); tab = VIEW.tab; }
+const nameView = () => { if (VIEW && document.getElementById('vtitle')) document.getElementById('vtitle').textContent = tab === 'projects' ? 'Projects' : tab === 'all' ? 'Home' : tabName(tab); };
+const tabName = (k) => k === 'setup' ? 'Set up a harness' : (ALL_TABS.find(([x]) => x === k) || [k, k])[1];
+if (POP) {
+  document.body.classList.add('pop'); const el = document.createElement('div'); el.className = 'popterm'; document.body.appendChild(el);
+  const id = `p${Math.random().toString(36).slice(2, 9)}`; const { term, fit } = makeTerm(el, null); let live = true;
+  const refit = () => { try { fit.fit(); } catch (_) {} }; new ResizeObserver(refit).observe(el);
+  T.event.listen('term', (e) => { if (e.payload.id === id) term.write(e.payload.data); });
+  T.event.listen('term-exit', (e) => { if (e.payload.id === id) { live = false; term.write('\r\n\x1b[2m— the session ended —\x1b[0m\r\n'); } });
+  term.onData((d) => { if (live) invoke('term_write', { id, data: d }).catch(() => {}); });
+  term.onResize(({ cols, rows }) => { if (live) invoke('term_resize', { id, cols, rows }).catch(() => {}); });
+  requestAnimationFrame(() => requestAnimationFrame(() => { refit(); invoke('term_open', { id, kind: POP.kind === 'claude' ? 'claude' : 'ubuntu', mode: 'attach', proj: null, name: POP.name, session: null, prompt: null, label: POP.label, cols: term.cols, rows: term.rows }).catch((e) => term.write(`\r\n\x1b[31m${String(e)}\x1b[0m\r\n`)); term.focus(); }));
+}
+if (!POP) drawProjects().then(reload).then(() => { nameView(); if (!VIEW && !D.empty) { ccRestore().catch(() => {}); try { boot(false); } catch (e) { trouble(`boot: ${e.stack || e}`); } try { if (localStorage.getItem('pin') === '1') { invoke('set_on_top', { on: true }); $('[data-pin]').setAttribute('aria-pressed', 'true'); } } catch (_) {} } $('#hk').innerHTML = `<kbd>${esc(D.hotkey || 'Ctrl+Shift+Space')}</kbd> anywhere`; drawList(); $('#q').focus(); }).catch((e) => { $('#view').innerHTML = `<p class="bad">${esc(String(e))}</p>`; });
+</script>
+</body>
+</html>

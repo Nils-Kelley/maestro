@@ -1,0 +1,15 @@
+# build output
+src-tauri/target/
+src-tauri/gen/
+
+# this machine's project list and the app's own log (the app writes both; maestro.config.example.json shows the shape)
+maestro.config.json
+maestro.log
+*.bak
+
+# words that must never be committed: read by tools/leak-check.mjs, one pattern per line
+.private-words
+
+# captures made while testing
+shot*.png
+.playwright-mcp/

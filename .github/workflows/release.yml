@@ -1,0 +1,37 @@
+name: Release
+
+# Push a tag like v0.1.0 and the build is attached to a draft release for you to check and publish.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: Release build
+        working-directory: src-tauri
+        run: cargo build --release
+      - name: Zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item src-tauri/target/release/maestro.exe out/
+          if (Test-Path src-tauri/target/release/WebView2Loader.dll) { Copy-Item src-tauri/target/release/WebView2Loader.dll out/ }
+          Copy-Item LICENSE, README.md, maestro.config.example.json out/
+          Compress-Archive -Path out/* -DestinationPath maestro-windows-x64.zip
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" maestro-windows-x64.zip --draft --generate-notes --title "Maestro ${{ github.ref_name }}"

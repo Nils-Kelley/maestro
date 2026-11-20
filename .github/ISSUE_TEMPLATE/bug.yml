@@ -1,0 +1,34 @@
+name: Bug
+description: Something does not work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got. A screenshot helps; check it shows nothing private first.
+    validations:
+      required: true
+  - type: dropdown
+    id: runs
+    attributes:
+      label: Where the project's agent runs
+      options: [inside WSL, on Windows, both / not sure]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Maestro version or commit
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version, and the WSL distro if one is involved
+  - type: textarea
+    id: log
+    attributes:
+      label: maestro.log
+      description: The last lines of maestro.log (beside maestro.exe), if it has any. Remove paths or names you would rather not share.
+      render: text

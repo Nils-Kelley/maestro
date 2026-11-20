@@ -1,0 +1,20 @@
+name: Idea
+description: Something Maestro could do, or do better
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The situation, before any solution. "With five sessions open I cannot tell which one …"
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+  - type: textarea
+    id: harness
+    attributes:
+      label: Your harness, if it matters
+      description: Which files your project keeps (CLAUDE.md, AGENTS.md, rules, skills, a log …) and where.

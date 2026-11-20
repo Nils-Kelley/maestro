@@ -1,0 +1,22 @@
+{
+  "hotkey": "Ctrl+Shift+Space",
+  "projects": [
+    {
+      "name": "my-project",
+      "root": "D:\\projects\\my-project",
+      "runs": "wsl",
+      "wslRoot": "/mnt/d/projects/my-project",
+      "distro": "Ubuntu",
+      "claudeHome": "\\\\wsl.localhost\\Ubuntu\\home\\<you>\\.claude",
+      "memoryDir": "\\\\wsl.localhost\\Ubuntu\\home\\<you>\\.claude\\projects\\-mnt-d-projects-my-project\\memory",
+      "favorite": true
+    },
+    {
+      "name": "windows-project",
+      "root": "C:\\code\\windows-project",
+      "runs": "windows",
+      "claudeHome": "C:\\Users\\<you>\\.claude",
+      "memoryDir": "C:\\Users\\<you>\\.claude\\projects\\C--code-windows-project\\memory"
+    }
+  ]
+}
