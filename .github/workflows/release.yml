@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.4.0: each system's build is attached to one draft release for you to check and publish.
+# Push a tag like v0.3.1: each system's build is attached to one draft release for you to check and publish.
 # The names of the files are what the app's own updater asks for; do not change them.
 on:
   push:

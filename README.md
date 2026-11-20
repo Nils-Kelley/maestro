@@ -250,7 +250,7 @@ page's script and builds with the Windows toolchain; `tools/build.sh test` runs 
 
 ## Status and limits
 
-Maestro is at 0.4: used daily by its author, new to everyone else. Known limits:
+Maestro is at 0.3: used daily by its author, new to everyone else. Known limits:
 
 - **macOS and Linux are new.** They are compiled and tested on every change, but they have had far less daily use than Windows.
   On Linux the global key works under X11, not under Wayland (use the tray icon or bind `maestro` to a key in your desktop);

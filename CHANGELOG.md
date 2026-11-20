@@ -3,7 +3,7 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 [Semantic Versioning](https://semver.org).
 
-## [0.4.0] - 2026-11-20
+## [0.3.1] - 2026-11-20
 
 ### Added
 - macOS and Linux. A project there is simply its folder; sessions live in a tmux server on the machine and outlive the app;
