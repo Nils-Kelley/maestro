@@ -3,6 +3,17 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 [Semantic Versioning](https://semver.org).
 
+## [0.3.0] - 2026-11-19
+
+### Added
+- The home screen starts sessions: type a task, pick a project, and Claude Code starts there while you stay on the screen.
+- Session cards, on the home screen and in the Console's "All": the answers a session is waiting for are buttons, any session
+  can be replied to from its card, and a small trace shows how busy it has been over the last five minutes.
+- One project picker everywhere: a list you can type into, favourites first and starred in place, with what is running in each.
+
+### Changed
+- The Console's start bar is one control: where, then Claude, Ubuntu or PowerShell, with drawn icons instead of letters.
+
 ## [0.2.0] - 2026-11-19
 
 ### Added

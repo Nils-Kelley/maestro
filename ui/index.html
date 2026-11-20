@@ -17,6 +17,7 @@
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; background: transparent; color: var(--fg); font: 13.5px/1.5 var(--sans); overflow: hidden; -webkit-font-smoothing: antialiased; }
+:root { color-scheme: dark; } /* the lists the system draws (a plain select) are dark too */
 ::selection { background: rgba(92, 200, 255, 0.3); }
 #panel { position: absolute; inset: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; background: var(--glass); border: 1px solid var(--line2); border-radius: 0; overflow: hidden; }
 #panel::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, transparent, rgba(92, 200, 255, 0.55) 18%, rgba(92, 200, 255, 0.55) 34%, transparent 62%); pointer-events: none; }
@@ -28,7 +29,17 @@ html, body { height: 100%; margin: 0; background: transparent; color: var(--fg);
 #q { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--fg); font: 400 20px/1.3 var(--disp); letter-spacing: -0.012em; caret-color: var(--accent); }
 #q::placeholder { color: var(--faint); }
 #proj { color: var(--dim); white-space: nowrap; }
-#proj select { width: 150px; background: none; border: 0; color: var(--ink2); font: inherit; cursor: pointer; outline: 0; text-overflow: ellipsis; } #proj select option { background: #10141a; color: var(--fg); }
+/* the project picker: a button that opens a searchable list (favourites first), wherever a project is chosen */
+.pick { display: inline-flex; align-items: center; gap: 7px; max-width: 220px; background: var(--raise); border: 1px solid var(--line); border-radius: 7px; color: var(--fg); font: inherit; font-size: 13px; padding: 4px 8px 4px 10px; cursor: pointer; transition: background 120ms, border-color 120ms; }
+.pick:hover, .pick[aria-expanded="true"] { background: var(--raise2); border-color: var(--line2); }
+.pick .pl { color: var(--dim); } .pick .pn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; } .pick svg { flex: none; color: var(--dim); }
+.menu { position: fixed; z-index: 200; width: 330px; max-height: min(440px, calc(100vh - 80px)); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: #11161d; border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55); overflow: hidden; }
+.menu .mq { background: none; border: 0; border-bottom: 1px solid var(--line); outline: 0; color: var(--fg); font: 13.5px var(--sans); padding: 10px 13px; caret-color: var(--accent); } .menu .mq::placeholder { color: var(--faint); }
+.menu .ml { overflow-y: auto; padding: 4px; } .menu .mg { color: var(--faint); font-size: 11.5px; padding: 7px 9px 3px; }
+.menu .mi { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.menu .mi[aria-selected="true"] { background: var(--sel); } .menu .mi .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .menu .mi .mt { color: var(--dim); font-size: 12px; white-space: nowrap; }
+.menu .mi .ck { width: 12px; color: var(--accent); } .menu .none { color: var(--dim); padding: 10px 9px; }
+.menu .mf { text-align: left; background: none; border: 0; border-top: 1px solid var(--line); color: var(--ink2); font: inherit; font-size: 12.5px; padding: 9px 13px; cursor: pointer; } .menu .mf:hover { background: var(--raise); color: var(--fg); }
 #tabsrow { display: flex; align-items: center; border-bottom: 1px solid var(--line); padding-right: 14px; min-width: 0; }
 #tabs { display: flex; gap: 20px; padding: 0 22px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; } #tabs::-webkit-scrollbar { display: none; }
 #tabs button { white-space: nowrap; flex: none; }
@@ -199,7 +210,7 @@ label.chk { display: inline-flex; gap: 8px; align-items: center; color: var(--di
 #claude { display: none; min-height: 0; }
 #body.claude { grid-template-columns: minmax(0, 1fr); } #body.claude #list, #body.claude #view { display: none; }
 #body.claude #claude { display: grid; grid-template-rows: auto minmax(0, 1fr); }
-.km { display: inline-grid; place-items: center; min-width: 20px; height: 18px; padding: 0 4px; border-radius: 5px; font: 700 10.5px var(--mono); color: #071018; background: #d9a36a; flex: none; } .km.ubuntu { background: #f08b4a; } .km.powershell { background: #5b9cf0; }
+.km { --k: 217, 163, 106; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; color: rgb(var(--k)); background: rgba(var(--k), 0.13); border: 1px solid rgba(var(--k), 0.3); flex: none; } .km.ubuntu { --k: 240, 139, 74; } .km.powershell { --k: 91, 156, 240; } .km svg { width: 12px; height: 12px; display: block; }
 .cdock { display: grid; gap: 7px; padding: 8px 12px 7px; border-bottom: 1px solid var(--line); min-width: 0; }
 .cdock .tabs { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; } .cdock .tabs::-webkit-scrollbar { display: none; }
 .stab { flex: 1 1 0; min-width: 170px; max-width: 320px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 8px; align-items: center; background: var(--raise); border: 1px solid var(--line); border-left: 3px solid #46505e; border-radius: 8px; color: var(--ink2); font: inherit; font-size: 12.5px; padding: 5px 6px 5px 8px; cursor: pointer; text-align: left; position: relative; }
@@ -212,7 +223,15 @@ label.chk { display: inline-flex; gap: 8px; align-items: center; color: var(--di
 .sd { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
 .sd.working { background: var(--accent); animation: pulse2 1s ease-in-out infinite; } .sd.finished { background: var(--ok); box-shadow: 0 0 0 3px rgba(62, 207, 114, 0.22); } .sd.needs { background: var(--warn); box-shadow: 0 0 0 3px rgba(250, 178, 25, 0.25); } .sd.new { background: var(--ink2); } .sd.idle { background: #46505e; } .sd.ended { background: none; border: 1px solid var(--faint); }
 @keyframes pulse2 { 50% { opacity: 0.35; } }
-.cdock .dr { display: flex; gap: 6px; align-items: center; } .cdock .dr .gap { margin-left: auto; } .cdock .dr .act { padding: 3px 9px; display: inline-flex; gap: 6px; align-items: center; } .cdock select.in { max-width: 130px; }
+.cdock .dr { display: flex; gap: 6px; align-items: center; } .cdock .dr .gap { margin-left: auto; }
+/* one bar to start a session: where, then what */
+.launch { display: inline-flex; align-items: stretch; min-width: 0; background: var(--raise); border: 1px solid var(--line2); border-radius: 8px; overflow: hidden; }
+.launch > * { border: 0; border-radius: 0; background: none; } .launch > * + * { border-left: 1px solid var(--line); }
+.launch .pick { max-width: 230px; padding: 5px 9px 5px 11px; }
+.launch .lseg { --k: 255, 255, 255; display: inline-flex; gap: 7px; align-items: center; color: var(--ink2); font: inherit; font-size: 12.5px; padding: 5px 12px 5px 9px; cursor: pointer; transition: background 120ms, color 120ms; }
+.launch .lseg.claude { --k: 217, 163, 106; } .launch .lseg.ubuntu { --k: 240, 139, 74; } .launch .lseg.powershell { --k: 91, 156, 240; } .launch .lseg.more { padding: 5px 11px; }
+.launch .lseg:hover { background: rgba(var(--k), 0.1); color: var(--fg); } .launch .lseg .km { width: 18px; height: 18px; border-radius: 5px; }
+.launch .lseg kbd { font-size: 10.5px; color: var(--faint); border-color: var(--line); background: none; padding: 0 4px; }
 .lay { display: inline-flex; border: 1px solid var(--line2); border-radius: 7px; overflow: hidden; } .lay button { background: none; border: 0; color: var(--dim); font: 11.5px var(--mono); padding: 3px 8px; cursor: pointer; } .lay button + button { border-left: 1px solid var(--line2); } .lay button[aria-pressed="true"] { background: var(--sel); color: var(--fg); }
 .cstage { position: relative; min-height: 0; }
 .cgrid { position: absolute; inset: 0; display: grid; gap: 1px; background: var(--line); }
@@ -225,7 +244,7 @@ label.chk { display: inline-flex; gap: 8px; align-items: center; color: var(--di
 .xterm .xterm-viewport { background: transparent !important; } .xterm .xterm-viewport::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); }
 .claunch { position: absolute; inset: 0; z-index: 30; background: #0d1116; overflow-y: auto; padding: 28px 36px 30px; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 48px; align-content: start; } .claunch[hidden] { display: none; }
 .cgrid[hidden] { display: none; }
-.claunch h1 select.in { font: inherit; font-size: 19px; font-weight: 600; padding: 1px 6px; margin-left: 2px; }
+.claunch h1 .pick { font: inherit; font-size: 19px; padding: 2px 9px 2px 11px; margin-left: 4px; vertical-align: baseline; max-width: 340px; } .claunch h1 .pick .pn { font-weight: 600; }
 .keys { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; color: var(--dim); font-size: 12.5px; align-items: baseline; } .keys span:nth-child(odd) { white-space: nowrap; }
 @media (max-width: 980px) { .claunch { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
 .claunch h1 { font: 600 21px/1.25 var(--disp); letter-spacing: -0.015em; margin: 0 0 6px; } .claunch p { color: var(--dim); margin: 0 0 14px; max-width: 62ch; }
@@ -236,15 +255,26 @@ label.chk { display: inline-flex; gap: 8px; align-items: center; color: var(--di
 .sess { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 6px 8px; border-radius: 7px; cursor: pointer; } .sess:hover { background: var(--raise); }
 .sess .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; } .sess .s { display: block; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .sess .x { color: var(--faint); border-radius: 5px; padding: 0 5px; } .sess .x:hover { color: #fff; background: #c7373a; }
 .old { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 5px 8px; border-radius: 7px; cursor: pointer; } .old:hover { background: var(--raise); } .old .t { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink2); } .old .s { display: block; color: var(--faint); font-size: 12px; }
-.cover { position: absolute; inset: 0; overflow-y: auto; padding: 16px 18px 22px; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; align-content: start; background: rgba(11, 14, 19, 0.6); } .cover[hidden] { display: none; }
-.agent { text-align: left; background: #10141a; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 11px; color: inherit; font: inherit; cursor: pointer; display: grid; gap: 8px; min-width: 0; position: relative; }
-.agent:hover { border-color: var(--line2); } .agent.needs { border-color: rgba(250, 178, 25, 0.6); } .agent.finished { border-color: rgba(62, 207, 114, 0.5); } .agent.working { border-color: rgba(92, 200, 255, 0.32); }
+.cover { position: absolute; inset: 0; overflow-y: auto; padding: 16px 18px 22px; display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; align-content: start; background: rgba(11, 14, 19, 0.6); } .cover[hidden] { display: none; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; align-content: start; }
+.agent { text-align: left; background: #10141a; border: 1px solid var(--line); border-left: 3px solid #46505e; border-radius: 10px; padding: 11px 13px 11px 12px; color: inherit; font: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 7px; min-width: 0; position: relative; }
+.agent.working { border-left-color: var(--accent); } .agent.finished { border-left-color: var(--ok); } .agent.needs { border-left-color: var(--warn); } .agent.new { border-left-color: var(--ink2); } .agent.ended { opacity: 0.7; }
+.agent .top .sp { margin-left: 6px; display: inline-flex; gap: 1px; } .agent .ib { width: 24px; height: 22px; display: grid; place-items: center; background: none; border: 0; border-radius: 6px; color: var(--dim); cursor: pointer; } .agent .ib:hover { background: var(--raise2); color: var(--fg); } .agent .ib.x:hover { background: #c7373a; color: #fff; }
+.agent .sw { color: var(--ink2); } .agent.working .sw { color: var(--accent); } .agent.finished .sw { color: var(--ok); } .agent.needs .sw { color: var(--warn); }
+.agent .beat { margin-left: auto; display: inline-flex; align-items: flex-end; gap: 1px; height: 14px; } .agent .beat i { width: 2px; min-height: 1px; background: #35506e; border-radius: 1px; } .agent.working .beat i { background: #4a86b8; }
+.agent .opts { display: flex; flex-wrap: wrap; gap: 6px; } .agent .opts:empty { display: none; } .agent .opts .act { padding: 3px 9px; display: inline-flex; gap: 7px; align-items: center; max-width: 100%; } .agent .opts .act span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .agent .opts kbd { font-size: 10.5px; }
+.agent .reply { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin: auto 0 0; } .agent .reply[hidden], .agent .asked[hidden] { display: none; } .agent .reply input.in { width: 100%; padding: 5px 9px; font-size: 13px; } .agent .reply .act { padding: 3px 11px; }
+/* the home screen's command line: give a task without leaving the screen */
+#dispatch { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 9px; align-items: center; margin: 0; }
+#dispatch input.in { width: 100%; background: none; border: 0; padding: 4px 2px; font: 400 16px/1.4 var(--disp); letter-spacing: -0.008em; caret-color: var(--accent); } #dispatch input.in::placeholder { color: var(--faint); }
+#dispatch .km { width: 24px; height: 24px; border-radius: 7px; } #dispatch .km svg { width: 14px; height: 14px; } #dispatch .act { padding: 5px 14px; }
+.pane .hint { color: var(--faint); font-size: 12px; margin: 8px 0 0 33px; }
+.agent:hover { border-top-color: var(--line2); border-right-color: var(--line2); border-bottom-color: var(--line2); }
 .agent .top { display: flex; gap: 8px; align-items: center; min-width: 0; } .agent .top b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .agent .top .num { font: 10.5px var(--mono); color: var(--faint); } .agent .top .pj { margin-left: auto; color: var(--dim); font-size: 12.5px; white-space: nowrap; }
-.agent .st { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink2); } .agent .st .ago { margin-left: auto; color: var(--faint); font: 11.5px var(--mono); }
+.agent .st { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink2); } .agent .st .ago { margin-left: 4px; min-width: 62px; text-align: right; color: var(--faint); font: 11.5px var(--mono); }
 .agent .asked { color: var(--dim); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .agent .now { color: var(--fg); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 19px; } .agent .now.dim { color: var(--dim); }
-.agent pre { margin: 0; font: 11px/1.45 var(--mono); color: #8d95a2; white-space: pre; overflow: hidden; height: 97px; background: rgba(0, 0, 0, 0.28); border-radius: 6px; padding: 6px 8px; }
-.agent .ft { display: flex; gap: 6px; } .agent .ft .act { padding: 2px 9px; }
+.agent pre { margin: 0; font: 11px/1.45 var(--mono); color: #8d95a2; white-space: pre; overflow: hidden; height: 108px; flex: none; background: rgba(0, 0, 0, 0.28); border-radius: 6px; padding: 6px 8px; }
 .cover .empty { grid-column: 1 / -1; color: var(--dim); padding: 30px 6px; }
 .ag { display: grid; grid-template-columns: auto auto minmax(0, 190px) auto minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; text-align: left; background: none; border: 0; border-top: 1px solid var(--line); color: inherit; font: inherit; padding: 7px 4px; cursor: pointer; } .ag:first-of-type { border-top: 0; } .ag:hover { background: var(--raise); }
 .ag b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ag .pj { color: var(--dim); white-space: nowrap; } .ag .nw { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ag .wd { color: var(--dim); font-size: 12.5px; white-space: nowrap; }
@@ -516,7 +546,42 @@ const KINDS = { claude: 'Claude Code', ubuntu: 'Ubuntu', powershell: 'PowerShell
 const TERM_THEME = { background: 'rgba(0,0,0,0)', foreground: '#e6e9ee', cursor: '#5cc8ff', cursorAccent: '#0a0d12', selectionBackground: 'rgba(92,200,255,0.3)', black: '#1b2028', brightBlack: '#5a6270', red: '#f0605f', brightRed: '#ff8f8a', green: '#3ecf72', brightGreen: '#74e39a', yellow: '#f0b429', brightYellow: '#ffd166', blue: '#5b9cf0', brightBlue: '#8fbcff', magenta: '#c4a7ff', brightMagenta: '#dcc8ff', cyan: '#5cc8ff', brightCyan: '#9be0ff', white: '#c0c6cf', brightWhite: '#ffffff' };
 const ccGet = (id) => CC.list.find((x) => x.id === id);
 const ccProj = () => (CC.proj == null || CC.proj >= PROJ.names.length ? PROJ.current : CC.proj);
-const kindMark = (k) => `<span class="km ${k}">${k === 'claude' ? 'C' : k === 'ubuntu' ? '$' : '>_'}</span>`;
+const KICON = {
+  claude: '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1.2v9.6M1.2 6h9.6M2.6 2.6l6.8 6.8M9.4 2.6L2.6 9.4" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/></svg>',
+  ubuntu: '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M8.6 3.7C8.1 3 7.2 2.6 6 2.6c-1.5 0-2.5.7-2.5 1.7 0 2.3 5 1.1 5 3.4 0 1-1 1.7-2.5 1.7-1.2 0-2.2-.5-2.7-1.2M6 1v10" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>',
+  powershell: '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.4 3l3.6 3-3.6 3M6.8 9.4h3" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+const kindMark = (k) => `<span class="km ${k}">${KICON[k] || KICON.powershell}</span>`;
+const CHEV = '<svg width="9" height="9" viewBox="0 0 9 9" fill="none" aria-hidden="true"><path d="M1.5 3l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// A project is always picked the same way: a button that opens a list you can type into, favourites first, each with what is
+// running in it. `which` says what the pick changes: pj (the project on screen), cproj (where the next session starts), home (the
+// home screen's task line).
+const pickBtn = (which, i, label) => `<button class="pick" type="button" data-pick="${which}" aria-haspopup="listbox" aria-expanded="false" title="Choose a project">${label ? `<span class="pl">${label}</span>` : ''}<span class="pn">${esc(PROJ.names[i] || 'No project')}</span>${CHEV}</button>`;
+let MENU = null;
+function closeMenu() { if (!MENU) return; MENU.el.remove(); if (MENU.btn.isConnected) MENU.btn.setAttribute('aria-expanded', 'false'); MENU = null; }
+function menuRows() { const q = MENU.q.value.trim().toLowerCase(); const { favs, rest } = projOrder(); const ok = (i) => !q || PROJ.names[i].toLowerCase().includes(q) || String(PROJ.roots[i] || '').toLowerCase().includes(q); return { favs: favs.filter(ok), rest: rest.filter(ok) }; }
+function drawMenu() {
+  const { favs, rest } = menuRows(); const order = [...favs, ...rest]; MENU.order = order; MENU.at = Math.max(0, Math.min(order.length - 1, MENU.at));
+  const row = (i) => { const n = CC.list.filter((x) => x.live && x.project === PROJ.names[i]).length; return `<div class="mi" role="option" data-mi="${i}" aria-selected="${order[MENU.at] === i}"><button class="star${isFav(i) ? ' on' : ''}" type="button" data-mfav="${i}" title="${isFav(i) ? 'Take it off your favourites' : 'Make it a favourite'}" aria-pressed="${isFav(i)}">${isFav(i) ? '★' : '☆'}</button><span class="nm">${esc(PROJ.names[i])}</span><span class="mt">${n ? `${n} running` : ''}${PROJ.native && PROJ.native[i] ? `${n ? ', ' : ''}Windows` : ''}</span><span class="ck">${i === MENU.selected ? '✓' : ''}</span></div>`; };
+  $('.ml', MENU.el).innerHTML = order.length ? `${favs.length ? `<div class="mg">Favourites</div>${favs.map(row).join('')}` : ''}${rest.length ? `${favs.length ? '<div class="mg">All projects</div>' : ''}${rest.map(row).join('')}` : ''}` : '<div class="none">No project matches.</div>';
+  const cur = $('.mi[aria-selected="true"]', MENU.el); if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+function openPicker(btn) {
+  if (MENU && MENU.btn === btn) return closeMenu(); closeMenu();
+  const which = btn.dataset.pick; const selected = which === 'pj' ? PROJ.current : which === 'home' ? homeProj() : ccProj();
+  const el = document.createElement('div'); el.className = 'menu'; el.innerHTML = `<input class="mq" placeholder="Find a project" spellcheck="false" autocomplete="off" aria-label="Find a project"><div class="ml" role="listbox"></div><button class="mf" type="button" data-manage>Add or remove a project…</button>`;
+  document.body.appendChild(el); const r = btn.getBoundingClientRect(); el.style.left = Math.max(8, Math.min(innerWidth - 338, r.left)) + 'px'; el.style.top = Math.min(innerHeight - 200, r.bottom + 6) + 'px';
+  MENU = { el, btn, which, selected, q: $('.mq', el), at: 0, order: [] }; btn.setAttribute('aria-expanded', 'true');
+  const { favs, rest } = menuRows(); MENU.at = Math.max(0, [...favs, ...rest].indexOf(selected)); drawMenu();
+  MENU.q.addEventListener('input', () => { MENU.at = 0; drawMenu(); }); MENU.q.focus();
+}
+function menuPick(i) {
+  const which = MENU.which; closeMenu();
+  if (which === 'pj') return setProject(i);
+  if (which === 'home') { HOME.proj = i; const b = $('[data-pick="home"] .pn'); if (b) b.textContent = PROJ.names[i]; const t = $('#task'); if (t) t.focus(); return; }
+  CC.proj = i; drawDock(); if (CC.launch || !CC.list.length) { drawLauncher(); const ta = $('#cprompt'); if (ta) ta.focus(); }
+}
+const HOME = { proj: null }; const homeProj = () => (HOME.proj == null || HOME.proj >= PROJ.names.length ? PROJ.current : HOME.proj);
 const sinceWord = (secs) => { const m = Math.max(0, Math.round((Date.now() / 1000 - secs) / 60)); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 // the chords that belong to the console, whether a session has the keyboard or not
 function ccChord(e) {
@@ -579,9 +644,10 @@ function drawDock() {
   const ctl = `${ccProj()}|${PROJ.names.join(',')}|${(PROJ.favs || []).join('')}|${CC.layout}|${CC.launch}|${CC.list.length > 0}`;
   if (!$('.cdock .tabs') || dock.dataset.ctl !== ctl) {
     dock.dataset.ctl = ctl;
-    dock.innerHTML = `<div class="tabs"></div><div class="dr"><span class="dim">Start in</span><select class="in" id="cproj" aria-label="Project to start in" title="Where the next session starts">${projOptions(ccProj())}</select>
-    <button class="act" data-cterm="claude" title="New Claude Code session (Ctrl+Shift+N)">${kindMark('claude')}Claude</button><button class="act" data-cterm="ubuntu" title="New Ubuntu terminal (Ctrl+Shift+U)">${kindMark('ubuntu')}Ubuntu</button><button class="act" data-cterm="powershell" title="New PowerShell terminal (Ctrl+Shift+P)">${kindMark('powershell')}PowerShell</button>
-    ${CC.list.length ? `<button class="act" data-claunch title="${CC.launch ? 'Back to the sessions (Esc)' : 'Start with a message, resume, or reopen a running session (Ctrl+Shift+K)'}">${CC.launch ? 'Back to the sessions' : 'More…'}</button>` : ''}
+    const nat = !!(PROJ.native && PROJ.native[ccProj()]);
+    dock.innerHTML = `<div class="tabs"></div><div class="dr"><div class="launch" role="group" aria-label="Start a session">${pickBtn('cproj', ccProj(), 'Start in')}
+      <button class="lseg claude" data-cterm="claude" title="New Claude Code session (Ctrl+Shift+N)">${kindMark('claude')}Claude</button>${nat ? '' : `<button class="lseg ubuntu" data-cterm="ubuntu" title="New Ubuntu terminal (Ctrl+Shift+U)">${kindMark('ubuntu')}Ubuntu</button>`}<button class="lseg powershell" data-cterm="powershell" title="New PowerShell terminal (Ctrl+Shift+P)">${kindMark('powershell')}PowerShell</button>
+      ${CC.list.length ? `<button class="lseg more" data-claunch title="${CC.launch ? 'Back to the sessions (Esc)' : 'Start with a message, resume, or reopen a running session (Ctrl+Shift+K)'}">${CC.launch ? 'Back to the sessions' : 'More…'}</button>` : ''}</div>
     <span class="gap dim">Show</span><span class="lay" role="group" aria-label="How many sessions to show at once" title="All at a glance (Ctrl+Shift+A), or sessions side by side (Ctrl+Shift+L)"><button data-clay="0" aria-pressed="${CC.layout === 0}">All</button>${[1, 2, 4, 6].map((n) => `<button data-clay="${n}" aria-pressed="${CC.layout === n}">${n}</button>`).join('')}</span></div>`;
   }
   drawDockTabs(); CC.list.forEach(tileHead); CC.sig = CC.list.map((x) => x.id + stateOf(x)).join('|') + CC.active + CC.layout + CC.launch;
@@ -628,7 +694,7 @@ function drawLauncher() {
   if (!CC.check) CC.check = {}; const ck = CC.check[ccProj()]; if (ck === undefined && ccProj() === PROJ.current && PROJ.names.length) { CC.check[ccProj()] = null; const at = ccProj(); invoke('term_check').then((c) => { CC.check[at] = c; if (tab === 'claude' && !$('#cprompt').value) drawLauncher(); }).catch(() => {}); }
   const missing = !ck ? '' : !ck.claude ? `Claude Code was not found ${ck.native ? 'on Windows' : 'in ' + ck.distro}: install it there first, then start a session.` : (!ck.native && !ck.tmux) ? `tmux was not found in ${ck.distro}, so sessions end when Maestro closes. Install it (for example sudo apt install tmux) and they keep running.` : '';
   const keep = $('#cprompt') ? $('#cprompt').value : CC.draft; const pn = PROJ.names[ccProj()] || '';
-  el.innerHTML = `<div class="col"><h1>Start Claude Code in ${PROJ.names.length > 1 ? `<select class="in" id="cproj2" aria-label="Project">${projOptions(ccProj())}</select>` : esc(pn)}</h1>${missing ? `<p class="warn">${esc(missing)}</p>` : ''}<p>Tell it what to do, or leave the box empty to just open a session. It runs with that project's rules, hooks, skills and memory, and asks before anything your settings do not already allow.</p>
+  el.innerHTML = `<div class="col"><h1>Start Claude Code in ${PROJ.names.length > 1 ? pickBtn('cproj', ccProj()) : esc(pn)}</h1>${missing ? `<p class="warn">${esc(missing)}</p>` : ''}<p>Tell it what to do, or leave the box empty to just open a session. It runs with that project's rules, hooks, skills and memory, and asks before anything your settings do not already allow.</p>
     <textarea id="cprompt" placeholder="What should it do?" spellcheck="false"></textarea>
     <div class="row"><button class="act go" data-cgo>Start</button><span class="dim"><kbd>Ctrl</kbd> <kbd>Enter</kbd></span><button class="act" data-ccont>Continue the last conversation</button></div>
     <h2>Or open a terminal in ${esc(pn)}</h2><div class="row" style="margin-top:0">${nat ? '' : `<button class="act" data-cterm="ubuntu">${kindMark('ubuntu')}Ubuntu</button>`}<button class="act" data-cterm="powershell">${kindMark('powershell')}PowerShell</button></div>
@@ -648,34 +714,70 @@ function peek(x) {
   let now = '';
   for (let i = body.length - 1; i >= 0 && i >= body.length - 25; i--) { const t = plain(body[i]); if (/esc to interrupt|tokens\)|\(\d+s\b|…\s*\(/i.test(t)) { now = t.replace(/^[^A-Za-z0-9]+/, '').replace(/\s*\((?:[^()]*esc to interrupt[^()]*|[^()]*tokens[^()]*)\)\s*$/i, ''); break; } }
   if (!now && x.kind !== 'claude') { const last = body[body.length - 1]; now = last ? plain(last) : ''; }
-  return { now, tail: body.slice(-7).map((t) => t.replace(/\s+$/, '').slice(0, 140)) };
+  // a question with numbered answers ("1. Yes  2. Yes, and don't ask again  3. No"), as Claude Code asks before it does something
+  let opts = []; for (let i = body.length - 1; i >= Math.max(0, body.length - 12); i--) { const m = plain(body[i]).match(/^[❯>›\s]*(\d)[.)]\s+(.{1,70})$/); if (m) opts.unshift([m[1], m[2].trim()]); else if (opts.length) break; }
+  if (opts.length < 2 || opts.some(([n], i) => Number(n) !== i + 1)) opts = [];
+  return { now, opts, tail: body.slice(-6).map((t) => t.replace(/\s+$/, '').slice(0, 140)) };
 }
 const ORDER = { needs: 0, finished: 1, working: 2, new: 3, idle: 4, ended: 5 };
+// How busy a session has been: what it printed in each of the last 30 ten-second spans (five minutes), oldest first.
+function beat(x, n) { const now = Math.floor(Date.now() / 10000); if (!x.beats) { x.beats = new Array(30).fill(0); x.beatAt = now; } const gap = Math.min(30, now - x.beatAt); for (let i = 0; i < gap; i++) { x.beats.shift(); x.beats.push(0); } x.beatAt = now; x.beats[29] += n; }
 const sayState = (x, st) => st === 'needs' ? 'Wants you' : st === 'finished' ? 'Finished, waiting for you' : st === 'working' ? 'Working' : st === 'new' ? 'New output' : st === 'ended' ? 'Ended' : 'Idle';
 const agoWord = (ms) => { const s2 = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s2 < 5 ? 'now' : s2 < 60 ? `${s2}s` : s2 < 3600 ? `${Math.round(s2 / 60)}m` : `${Math.round(s2 / 3600)}h`; };
-function drawOverview() {
-  const el = $('.cover'); if (!el || el.hidden) return;
-  if (!CC.list.length) { el.innerHTML = '<div class="empty">No session is open. Start one from the bar above, or press <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>N</kbd> for Claude Code.</div>'; return; }
-  const rows = CC.list.map((x, i) => ({ x, i, st: stateOf(x), pk: peek(x) })).sort((a, b) => ORDER[a.st] - ORDER[b.st] || a.i - b.i);
-  el.innerHTML = rows.map(({ x, i, st, pk }) => `<div class="agent ${st}" role="button" tabindex="0" data-csel="${x.id}" title="Open this session">
-    <div class="top"><span class="num">${i < 9 ? i + 1 : ''}</span>${kindMark(x.kind)}<b>${esc(x.label)}</b><span class="pj">${esc(x.project)}</span></div>
-    <div class="st"><i class="sd ${st}"></i><span>${sayState(x, st)}</span><span class="ago">${st === 'working' ? `running ${agoWord(x.at.getTime())}` : `quiet ${agoWord(x.lastOut)}`}</span></div>
-    ${x.asked ? `<div class="asked" title="${esc(x.asked)}">Asked: ${esc(x.asked)}</div>` : ''}
-    <div class="now ${pk.now ? '' : 'dim'}">${esc(pk.now || (st === 'working' ? 'Working…' : x.kind === 'claude' ? 'Waiting at its prompt' : ''))}</div>
-    <pre aria-hidden="true">${esc(pk.tail.join('\n'))}</pre>
-    <div class="ft"><button class="act" data-csel="${x.id}">Open</button>${x.keeps && x.live ? `<button class="act" data-cpop="${x.id}">Own window</button>` : ''}<button class="act" data-cend="${x.id}">${x.live ? 'End' : 'Remove'}</button></div></div>`).join('');
+// One card per session, the same on the home screen and in the Console's "All": what was asked, what it is doing, its last lines,
+// how busy it has been, the answers it is waiting for, and a line to reply on. Cards are kept and only their contents change,
+// so a reply being typed is never thrown away by the next tick.
+function makeCard(x) {
+  const c = document.createElement('div'); c.className = 'agent'; c.dataset.card = x.id; c.dataset.agent = x.id; c.setAttribute('role', 'group'); c.title = 'Click to open this session';
+  c.innerHTML = `<div class="top"><span class="num"></span>${kindMark(x.kind)}<b></b><span class="pj"></span><span class="sp">${x.keeps ? `<button class="ib" type="button" data-cpop="${x.id}" title="Give it a window of its own">${IC.pop}</button>` : ''}<button class="ib x" type="button" data-cend="${x.id}" title="End this session">${IC.end}</button></span></div>
+    <div class="st"><i class="sd"></i><span class="sw"></span><span class="beat" aria-hidden="true"></span><span class="ago"></span></div>
+    <div class="asked"></div><div class="now"></div><pre aria-hidden="true"></pre><div class="opts"></div>
+    <form class="reply" data-reply="${x.id}"><input class="in" placeholder="Reply, or press Enter to send Enter" autocomplete="off" spellcheck="false" aria-label="Reply to this session"><button class="act" type="submit">Send</button></form>`;
+  return c;
 }
+function fillCard(c, x, i, st, pk) {
+  const set = (sel, text) => { const n = $(sel, c); if (n.textContent !== text) n.textContent = text; };
+  if (c.className !== `agent ${st}`) c.className = `agent ${st}`;
+  set('.num', i < 9 ? String(i + 1) : ''); set('.top b', x.label); set('.pj', x.project); $('.sd', c).className = `sd ${st}`; set('.sw', sayState(x, st));
+  set('.ago', st === 'ended' ? '' : st === 'working' ? `running ${agoWord(x.at.getTime())}` : `quiet ${agoWord(x.lastOut)}`);
+  const asked = $('.asked', c); asked.hidden = !x.asked || x.asked === x.label; set('.asked', x.asked ? `Asked: ${x.asked}` : '');
+  const now = pk.now || (st === 'working' ? 'Working…' : st === 'ended' ? 'Ended' : pk.opts.length && x.kind === 'claude' ? 'Waiting for your answer' : x.kind === 'claude' ? 'Waiting at its prompt' : ''); set('.now', now); $('.now', c).classList.toggle('dim', !pk.now);
+  set('pre', pk.tail.join('\n'));
+  if (x.live) beat(x, 0); const b = x.beats || []; const top = Math.max(1, ...b); const sig = b.map((v) => Math.round(Math.sqrt(v / top) * 12)).join(','); const bt = $('.beat', c); if (bt.dataset.sig !== sig) { bt.dataset.sig = sig; bt.innerHTML = sig.split(',').map((h) => `<i style="height:${Math.max(1, Number(h))}px"></i>`).join(''); }
+  const opts = x.live && x.kind === 'claude' && st !== 'working' ? pk.opts : []; const osig = opts.map((o) => o.join(':')).join('|'); const oe = $('.opts', c);
+  if (oe.dataset.sig !== osig) { oe.dataset.sig = osig; oe.innerHTML = opts.length ? opts.map(([n, t]) => `<button class="act" type="button" data-opt="${n}" data-for="${x.id}" title="Answer ${n}: ${esc(t)}"><kbd>${n}</kbd><span>${esc(t)}</span></button>`).join('') + `<button class="act" type="button" data-opt="esc" data-for="${x.id}" title="Send Esc: cancel the question"><kbd>Esc</kbd></button>` : ''; }
+  const f = $('.reply', c); if (f.hidden !== !x.live) f.hidden = !x.live;
+}
+function drawDeck(el, empty) {
+  if (!el) return;
+  if (!CC.list.length) { if (!$(':scope > .empty', el)) el.innerHTML = `<div class="empty">${empty}</div>`; return; }
+  el.querySelectorAll(':scope > :not(.agent)').forEach((n) => n.remove());
+  const rows = CC.list.map((x, i) => ({ x, i, st: stateOf(x) })).sort((a, b) => ORDER[a.st] - ORDER[b.st] || a.i - b.i);
+  const have = new Map([...el.querySelectorAll(':scope > .agent')].map((c) => [c.dataset.card, c]));
+  for (const { x, i, st } of rows) { let c = have.get(x.id); if (!c) { c = makeCard(x); el.appendChild(c); } have.delete(x.id); fillCard(c, x, i, st, st === 'ended' ? { now: '', opts: [], tail: [] } : peek(x)); }
+  have.forEach((c) => c.remove());
+  // the one that wants you comes first, but nothing moves while you are typing into a card
+  const typing = el.contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
+  const want = rows.map((r) => r.x.id); const is = [...el.querySelectorAll(':scope > .agent')].map((c) => c.dataset.card);
+  if (!typing && want.join('|') !== is.join('|')) for (const id of want) el.appendChild(el.querySelector(`:scope > .agent[data-card="${id}"]`));
+}
+function drawOverview() { const el = $('.cover'); if (!el || el.hidden) return; drawDeck(el, 'No session is open. Start one from the bar above, or press <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>N</kbd> for Claude Code.'); }
+// Say something to a session without opening it: the text, then Enter. An empty reply is just Enter.
+function ccSay(id, text) {
+  const x = ccGet(id); if (!x || !x.live) return say('That session has ended', 'bad');
+  const enter = () => invoke('term_write', { id, data: '\r' }).catch(() => {});
+  if (text) { invoke('term_write', { id, data: text }).then(() => setTimeout(enter, 90)).catch((e) => say(String(e), 'bad')); ccTyped(x, text); ccTyped(x, '\r'); } else enter();
+  x.bell = false; x.done = false; x.unseen = false;
+}
+// One sentence for all of them: "5 sessions: 1 wants you, 2 working, 1 finished".
+function deckLine() { const n = { needs: 0, working: 0, finished: 0 }; let live = 0; for (const x of CC.list) { const st = stateOf(x); if (x.live) live++; if (st in n) n[st]++; } const parts = [n.needs ? `${n.needs} want${n.needs === 1 ? 's' : ''} you` : '', n.working ? `${n.working} working` : '', n.finished ? `${n.finished} finished` : ''].filter(Boolean); return !CC.list.length ? 'none running' : `${live} open${parts.length ? ': ' + parts.join(', ') : ', all quiet'}`; }
 setInterval(() => { if (tab === 'claude' && CC.list.length) { drawDockTabs(); if (CC.layout === 0 && !CC.launch) drawOverview(); } else if (tab === 'all' && $('#agents')) drawAgents(); }, 1000);
 // the same, one line each, on the home screen
-function drawAgents() {
-  const el = $('#agents'); if (!el) return;
-  const rows = CC.list.map((x, i) => ({ x, i, st: stateOf(x) })).sort((a, b) => ORDER[a.st] - ORDER[b.st] || a.i - b.i);
-  el.innerHTML = rows.map(({ x, st }) => { const pk = peek(x); return `<button class="ag" data-agent="${x.id}"><i class="sd ${st}"></i>${kindMark(x.kind)}<b>${esc(x.label)}</b><span class="pj">${esc(x.project)}</span><span class="nw">${esc(pk.now || (pk.tail[pk.tail.length - 1] || '').trim())}</span><span class="wd">${sayState(x, st)}</span></button>`; }).join('');
-}
+function drawAgents() { const el = $('#agents'); if (!el) return; drawDeck(el, 'No session is running. Give a task above, or open the Console for a terminal.'); const ln = $('#deckline'); if (ln) { const t = deckLine(); if (ln.textContent !== t) ln.textContent = t; } }
 function drawClaude() { if (!$('.cdock')) return; if (Date.now() - CC.at > 8000) { CC.at = Date.now(); ccRefresh(); } drawDock(); ccLayout(); drawLauncher(); }
 function askClaude(text) { CC.draft = text; CC.launch = true; setTab('claude'); const t2 = $('#cprompt'); if (t2) { t2.value = text; t2.focus(); t2.setSelectionRange(text.length, text.length); } }
 const ccWatching = (x) => tab === 'claude' && !CC.launch && !x.tile.hidden && document.hasFocus() && (CC.layout > 1 || x.id === CC.active);
-T.event.listen('term', (e) => { const x = ccGet(e.payload.id); if (!x) return; x.term.write(e.payload.data); x.lastOut = Date.now(); if (!ccWatching(x)) { x.unseen = true; if (e.payload.data.includes('\x07')) x.bell = true; } });
+T.event.listen('term', (e) => { const x = ccGet(e.payload.id); if (!x) return; x.term.write(e.payload.data); x.lastOut = Date.now(); beat(x, e.payload.data.length); if (!ccWatching(x)) { x.unseen = true; if (e.payload.data.includes('\x07')) x.bell = true; } });
 T.event.listen('term-exit', (e) => { const x = ccGet(e.payload.id); if (!x) return; x.live = false; x.term.write('\r\n\x1b[2m— the session ended —\x1b[0m\r\n'); drawTabs(); drawDock(); setTimeout(ccRefresh, 800); });
 // a session that was working and has gone quiet while you were not looking has finished, or is waiting for you: say so on the taskbar
 setInterval(() => { if (!CC.list.length) return; for (const x of CC.list) { const st = stateOf(x); if (x.was === 'working' && st !== 'working' && x.live && !ccWatching(x) && Date.now() - x.at.getTime() > 8000) { x.done = true; x.unseen = true; invoke('attention').catch(() => {}); } if (ccWatching(x) && st !== 'working') { x.unseen = false; x.done = false; x.bell = false; } x.was = stateOf(x) === 'working' ? 'working' : 'quiet'; } const sig = CC.list.map((x) => x.id + stateOf(x)).join('|') + CC.active + CC.layout + CC.launch; if (sig !== CC.sig) { drawDock(); drawTabs(); } }, 700);
@@ -710,6 +812,9 @@ function actions() {
 }
 function runAction(it) { $('#q').value = ''; sel = 0; search(); drawList(); Promise.resolve().then(it.run).catch((e) => say(String(e), 'bad')); }
 function drawHome() {
+  // the screen is drawn afresh; what was being typed on it (a task, a reply) is carried over
+  const typed = [...document.querySelectorAll('#task, #agents .reply input')].filter((n) => n.value || n === document.activeElement).map((n) => ({ key: n.id || n.closest('.reply').dataset.reply, value: n.value, focus: n === document.activeElement, at: n.selectionStart }));
+  setTimeout(() => { for (const t of typed) { const n = t.key === 'task' ? $('#task') : $(`#agents .reply[data-reply="${t.key}"] input`); if (!n) continue; n.value = t.value; if (t.focus) { n.focus(); try { n.setSelectionRange(t.at, t.at); } catch (_) {} } } }, 0);
   const L = D.ledger, st = L.status || {}, closed = ['shipped', 'verified', 'superseded', 'n/a'].reduce((n, k) => n + (st[k] || 0), 0), open = L.total - closed;
   const noHead = Object.entries(L.repos || {}).filter(([, r]) => !r.head).map(([k]) => k);
   const hot = (D.hot || []).map(loadFor).sort((a, b) => b.total - a.total), over = hot.filter((h) => h.over), P = D.probes;
@@ -735,7 +840,9 @@ function drawHome() {
   const read = (go, n, lab, sub) => `<button class="read" data-go="${go}"><span class="big">${num(n)}</span><span class="lab">${lab}</span><span class="sub">${esc(sub)}</span></button>`;
   const types = {}; for (const m of D.memories) types[m.type || 'other'] = (types[m.type || 'other'] || 0) + 1;
   $('#view').innerHTML = `<div class="deck">
-    ${CC.list.length ? `<section class="pane wide"><h2>Your sessions<span>${CC.list.filter((x) => x.live).length} open · click one to go to it</span></h2><div id="agents"></div></section>` : ''}
+    <section class="pane wide"><form id="dispatch">${kindMark('claude')}<input class="in" id="task" placeholder="Give Claude a task…" autocomplete="off" spellcheck="false" aria-label="A task for a new Claude Code session">${pickBtn('home', homeProj(), 'in')}<button class="act go" type="submit">Start</button></form>
+      <div class="hint">Starts a Claude Code session in that project and keeps you here; it appears below. Leave it empty to open the Console.</div></section>
+    <section class="pane wide"><h2>Sessions<span id="deckline">${deckLine()}</span></h2><div id="agents" class="cards"></div></section>
     <section class="pane"><h2>Needs you<span>${N.length ? `${N.length} to decide` : 'nothing to decide'}</span></h2>
       ${N.length ? N.map(([lvl, word, what, why, go]) => `<button class="need" data-go="${go}"><span class="st">${GLYPH[lvl]}${word}</span><span><b>${esc(what)}</b><span class="why">${esc(why)}</span></span><span class="go">open →</span></button>`).join('') : `<p class="lead" style="margin:0">${GLYPH.ok} Nothing here needs a decision.</p>`}
     </section>
@@ -847,15 +954,14 @@ let loadSeq = 0;
 async function reload() {
   const my = ++loadSeq; const d = await invoke('load'); if (my !== loadSeq) return; // a newer read is on its way: this one is stale
   D = d; if (D.empty) tab = 'projects'; else if (tab === 'setup' && !D.project.bare && !PLAN) tab = 'all'; fitTabs(); build(); drawTabs(); search();
-  const at = PROJ.names.indexOf(D.project.name); const pj = $('#pj'); if (pj && at >= 0 && Number(pj.value) !== at) { pj.value = String(at); PROJ.current = at; } // the name shown is always the project whose files are on screen
+  const at = PROJ.names.indexOf(D.project.name); if (at >= 0) { PROJ.current = at; const pn = $('[data-pick="pj"] .pn'); if (pn) pn.textContent = PROJ.names[at]; } // the name shown is always the project whose files are on screen
 }
-async function drawProjects() { PROJ = await invoke('projects'); $('#proj').innerHTML = `<select id="pj" aria-label="Project">${projOptions(PROJ.current)}<option value="manage">Add, remove or favourite a project…</option></select>`; }
+async function drawProjects() { PROJ = await invoke('projects'); $('#proj').innerHTML = PROJ.names.length ? pickBtn('pj', PROJ.current) : ''; }
 let FOUND = null;
 // star or unstar a project, from the Projects screen or from the Console's one-click list; whichever is on screen is drawn again
 async function setFav(i, on) { try { await invoke('set_favorite', { i, on }); await drawProjects(); if (tab === 'projects') drawProjectsPage(); drawDock(); if (tab === 'claude') drawLauncher(); say(on ? `${PROJ.names[i]} is a favourite` : `${PROJ.names[i]} is no longer a favourite`, 'ok'); } catch (err) { say(String(err), 'bad'); } }
 const isFav = (i) => !!(PROJ.favs && PROJ.favs[i]);
 const projOrder = () => { const all = PROJ.names.map((n, i) => i); const byName = (a, b) => PROJ.names[a].localeCompare(PROJ.names[b]); return { favs: all.filter(isFav).sort(byName), rest: all.filter((i) => !isFav(i)).sort(byName) }; };
-function projOptions(selected) { const { favs, rest } = projOrder(); const opt = (i) => `<option value="${i}"${i === selected ? ' selected' : ''}>${esc(PROJ.names[i])}</option>`; return favs.length ? `<optgroup label="Favourites">${favs.map(opt).join('')}</optgroup><optgroup label="All projects">${rest.map(opt).join('')}</optgroup>` : rest.map(opt).join(''); }
 function drawProjectsPage() {
   const f = FOUND, e = f && f.entry, x = f && f.found, first = !PROJ.names.length;
   const facts = !f ? [] : [
@@ -916,17 +1022,30 @@ async function setProject(i) {
   $('#q').focus();
 }
 document.addEventListener('auxclick', (e) => { const vt = e.button === 1 && e.target.closest && e.target.closest('[data-tab]'); if (vt) { e.preventDefault(); return popView(vt.dataset.tab); } const b = e.button === 1 && e.target.closest && e.target.closest('.stab'); if (b) { e.preventDefault(); ccCloseTab(b.dataset.csel); } });
-document.addEventListener('change', (e) => { if (e.target.id === 'cproj' || e.target.id === 'cproj2') { CC.proj = Number(e.target.value); drawDock(); if (CC.launch || !CC.list.length) { drawLauncher(); const ta = $('#cprompt'); if (ta) ta.focus(); } return; }
+document.addEventListener('change', (e) => {
   if (e.target.id === 'grepo') { const name = e.target.value; const repos = G.repos; gitReset(); G.repos = repos; G.repo = name; drawTabs(); return drawGit(); }
   if (e.target.id === 'updauto') return invoke('update_auto_set', { on: e.target.checked }).then((on) => { UPD.auto = !!on; say(on ? 'Maestro will check for updates when it starts' : 'Maestro will only check when you ask', 'ok'); }).catch((err) => { e.target.checked = !e.target.checked; say(String(err), 'bad'); });
   if (e.target.id === 'favadd') { if (e.target.value !== '') setFav(Number(e.target.value), true); return; }
   if (e.target.id === 'p-runs') return look(FOUND.typed, e.target.value);
-  if (e.target.id === 'pj') { if (e.target.value === 'manage') { e.target.value = String(PROJ.current); FOUND = null; return setTab('projects'); } setProject(Number(e.target.value)); } if (e.target.id === 'auto') invoke('autostart_set', { on: e.target.checked }).then((on) => { e.target.checked = !!on; say(on ? 'Maestro will start with Windows' : 'Maestro will not start with Windows', 'ok'); }).catch((err) => { e.target.checked = !e.target.checked; say(String(err), 'bad'); }); });
+  if (e.target.id === 'auto') invoke('autostart_set', { on: e.target.checked }).then((on) => { e.target.checked = !!on; say(on ? 'Maestro will start with Windows' : 'Maestro will not start with Windows', 'ok'); }).catch((err) => { e.target.checked = !e.target.checked; say(String(err), 'bad'); }); });
 function setTab(k) { if (D.empty) k = 'projects'; tab = k; sel = 0; fitTabs(); nameView(); drawTabs(); search(); drawList(); $('#q').focus(); }
 
 $('#q').addEventListener('input', () => { if (tab === 'git' && !$('#q').value.trimStart().startsWith('>') && G.status && $('.gbody')) return gitDraw(true); sel = 0; search(); drawList(); });
+document.addEventListener('submit', (e) => {
+  e.preventDefault(); const f = e.target;
+  if (f.id === 'dispatch') { const text = $('#task').value.trim(); if (!text) { setTab('claude'); return ccLauncher(true); } const proj = homeProj(); $('#task').value = ''; return ccStart('claude', { prompt: text, proj, quiet: true }).then(() => { drawAgents(); say(`Started in ${PROJ.names[proj]}`, 'ok'); const t = $('#task'); if (t) t.focus(); }); }
+  if (f.dataset.reply) { const inp = $('input', f); const text = inp.value; inp.value = ''; return ccSay(f.dataset.reply, text); }
+});
 document.addEventListener('click', (e) => {
-  const t = e.target; const tb = t.closest('[data-tab]'); if (tb) return setTab(tb.dataset.tab);
+  const t = e.target;
+  if (MENU && !t.closest('.menu') && !t.closest('[data-pick]')) closeMenu();
+  if (t.closest('[data-pick]')) return openPicker(t.closest('[data-pick]'));
+  if (t.closest('[data-mfav]')) { e.stopPropagation(); const i = Number(t.closest('[data-mfav]').dataset.mfav); return setFav(i, !isFav(i)).then(() => { if (MENU) drawMenu(); }); }
+  if (t.closest('[data-mi]')) return menuPick(Number(t.closest('[data-mi]').dataset.mi));
+  if (t.closest('[data-manage]')) { closeMenu(); FOUND = null; return setTab('projects'); }
+  if (t.closest('[data-opt]')) { const b = t.closest('[data-opt]'); const x = ccGet(b.dataset.for); if (x && x.live) { invoke('term_write', { id: x.id, data: b.dataset.opt === 'esc' ? '\x1b' : b.dataset.opt }).catch((err) => say(String(err), 'bad')); x.bell = false; x.unseen = false; } return; }
+  if (t.closest('.reply')) return; // typing a reply is not opening the session
+  const tb = t.closest('[data-tab]'); if (tb) return setTab(tb.dataset.tab);
   const go = t.closest('[data-go]'); if (go) return setTab(go.dataset.go);
   if (t.closest('[data-new]')) return newForm(t.closest('[data-new]').dataset.new); // before the list rows: it is one of them
   const item = t.closest('.item'); if (item) { sel = Number(item.dataset.i); drawList(); $('#q').focus(); return; }
@@ -989,6 +1108,13 @@ document.addEventListener('click', (e) => {
   }
 });
 document.addEventListener('keydown', (e) => {
+  if (MENU) { // the open list has the keyboard
+    if (e.key === 'Escape') { e.preventDefault(); const b = MENU.btn; closeMenu(); if (b.isConnected) b.focus(); return; }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); MENU.at = Math.max(0, Math.min(MENU.order.length - 1, MENU.at + (e.key === 'ArrowDown' ? 1 : -1))); return drawMenu(); }
+    if (e.key === 'Enter') { e.preventDefault(); if (MENU.order.length) menuPick(MENU.order[MENU.at]); return; }
+    if (e.key === 'Tab') { e.preventDefault(); return; }
+    return;
+  }
   if (e.target.closest && e.target.closest('.term')) return; // everything typed into a session goes to Claude Code, Esc and Tab included
   if (tab === 'claude' && ccChord(e)) { e.preventDefault(); return; }
   if (e.target.id === 'cprompt') { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return ccStart('claude', { prompt: e.target.value }); } if (e.key === 'Escape' && CC.list.length) { e.preventDefault(); return ccLauncher(false); } if (e.key !== 'Escape') return; }

@@ -70,7 +70,7 @@
       say(id, `\x1b[2m ${where} · main\x1b[0m\r\n\r\n\x1b[1m>\x1b[0m ${ask}\r\n\r\n`);
       const dot = '\x1b[36m●\x1b[0m ';
       const steps = /dry/.test(ask)
-        ? [dot + 'Reading src/stations/lookup.ts\r\n', dot + 'Searching the log: dry harbour\r\n', dot + 'Reading .claude/log/' + log[3].slug + '.md\r\n', '\r\nStation 4412 has no datum in the provider\'s list, and an older build drew a missing datum as zero.\r\nThe rule now is to skip such a station. The cached list on this machine is from before that fix.\r\n\r\nRefresh the station cache? \x1b[2m(y/n)\x1b[0m ']
+        ? [dot + 'Reading src/stations/lookup.ts\r\n', dot + 'Searching the log: dry harbour\r\n', dot + 'Reading .claude/log/' + log[3].slug + '.md\r\n', '\r\nStation 4412 has no datum in the provider\'s list, and an older build drew a missing datum as zero.\r\nThe cached list on this machine is from before that fix.\r\n\r\n\x1b[1mRefresh the station cache?\x1b[0m  npm run stations:refresh\r\n\x1b[36m❯\x1b[0m 1. Yes\r\n  2. Yes, and don\'t ask again for npm run\r\n  3. No, tell me what it would change\r\n\x07']
         : [dot + 'Reading src/components/TideChart.tsx\r\n', dot + 'Rule applies: the tide curve is drawn from at most 288 points\r\n', dot + 'Editing src/components/TideChart.tsx \x1b[32m+42\x1b[0m \x1b[31m-17\x1b[0m\r\n', dot + 'Running npm test -- TideChart\r\n  \x1b[32m✓\x1b[0m 14 passed\r\n', '\r\nThe curve now uses 288 points and a smoothed path. Tests pass.\r\n\r\n\x1b[1m>\x1b[0m '];
       steps.forEach((t, i) => setTimeout(() => terms[id] && say(id, t), 250 + i * 350));
     },
@@ -103,9 +103,9 @@
     clip_get: () => window.__PREVIEW.clipboard || '',
     term_write: ({ id, data }) => { (window.__PREVIEW.written = window.__PREVIEW.written || []).push(data); say(id, data === '\r' ? '\r\n' : data); return null; },
     term_close: ({ id }) => { delete terms[id]; emit('term-exit', { id }); return null; },
-    update_state: () => ({ current: '0.2.0', auto: false, repo: 'example/maestro' }),
-    update_check: () => ({ current: '0.2.0', latest: '0.3.0', tag: 'v0.3.0', newer: !new URLSearchParams(location.search).has('uptodate'), notes: '## Added\n- Sessions can be renamed from their tab\n- The Git tab shows stashes\n\n## Fixed\n- A tile kept its old size after the window was restored', published: day(2) + 'T10:00:00Z', asset: 'https://github.com/example/maestro/releases/download/v0.3.0/maestro-windows-x64.zip', auto: false }),
-    update_auto_set: ({ on }) => on, update_page: () => null, update_install: () => '0.3.0',
+    update_state: () => ({ current: '0.3.0', auto: false, repo: 'example/maestro' }),
+    update_check: () => ({ current: '0.3.0', latest: '0.4.0', tag: 'v0.4.0', newer: !new URLSearchParams(location.search).has('uptodate'), notes: '## Added\n- Sessions can be renamed from their tab\n- The Git tab shows stashes\n\n## Fixed\n- A tile kept its old size after the window was restored', published: day(2) + 'T10:00:00Z', asset: 'https://github.com/example/maestro/releases/download/v0.4.0/maestro-windows-x64.zip', auto: false }),
+    update_auto_set: ({ on }) => on, update_page: () => null, update_install: () => '0.4.0',
     autostart_get: () => false, autostart_set: ({ on }) => on,
     note: ({ text }) => { console.warn('[maestro.log]', text); return null; },
   };

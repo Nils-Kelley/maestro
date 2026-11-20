@@ -104,9 +104,12 @@ only when the project has something for it.
 `<harness>` is `.claude/`, or `.agents/` in a project that keeps its rules, skills or log there. The instructions file is
 `CLAUDE.md`, or `AGENTS.md` where that is the one the project has. [docs/harness.md](docs/harness.md) has the exact shapes.
 
-![The home screen: what an edit to each busy file loads, work per day, counts of memories, skills, rules, hooks](docs/img/home.png)
+![The home screen: a line to give a task, a card per session with its last lines, the answers it is waiting for and a reply box](docs/img/home.png)
 
-The home screen answers one question first: does anything need you? It then shows how much the agent is handed before it
+The home screen is where you run things from. Type a task and pick a project, and a Claude Code session starts in it while you
+stay where you are. Every session has a card: what was asked, what it is doing, its last lines and how busy it has been. When
+one stops to ask something, its answers are buttons on the card; any session can be replied to from its card without opening
+it. Below that, the screen shows how much the agent is handed before it
 edits each of your busiest files (name them as `hot` in `<harness>/maestro.json`), so rules that grew past what fits are found
 before they are silently skipped.
 
@@ -143,7 +146,7 @@ open a shell. Every session is the real program in a real terminal; Maestro adds
 For WSL projects install `tmux` in the distro (`sudo apt install tmux`); without it sessions still open but end with the app.
 Maestro's tmux server (`tmux -L maestro`) is separate from any tmux you use yourself. See [wsl/README.md](wsl/README.md).
 
-Views: **All** shows a card per session with what was asked, what it is doing now and its last lines; **1, 2, 4, 6** tile that
+Views: **All** shows the same cards as the home screen (answer and reply from there); **1, 2, 4, 6** tile that
 many side by side. Any session, and any tab of the app, can be given a window of its own.
 
 ![The Git tab: changed files on the left, a diff with old and new line numbers on the right](docs/img/git.png)
@@ -234,7 +237,7 @@ page's script and builds with the Windows toolchain; `tools/build.sh test` runs 
 
 ## Status and limits
 
-Maestro is at 0.2: used daily by its author, new to everyone else. Known limits:
+Maestro is at 0.3: used daily by its author, new to everyone else. Known limits:
 
 - **Windows only.** Tauri runs on macOS and Linux, but the session layer, the hotkey and the window are written for Windows.
 - **Sessions are Claude Code.** The harness screens read `AGENTS.md` projects from any agent; the Console starts Claude Code
