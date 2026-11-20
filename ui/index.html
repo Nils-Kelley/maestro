@@ -280,9 +280,9 @@ let TABS = ALL_TABS;
 // a tab is shown when the project has something for it: a ledger, registered checks, session drafts, audits or a log are not in every harness
 const FITS = { ship: () => D.ledger.total > 0 || D.project.kit, checks: () => (D.registry || []).length > 0 || !!D.probes, sessions: () => D.sessions.drafts > 0, audit: () => (D.audits || []).length > 0, work: () => D.log.length > 0 };
 function fitTabs() { TABS = D.empty ? [] : ALL_TABS.filter(([k]) => !FITS[k] || FITS[k]() || k === tab); }
-const PAGES = { claude: drawClaude, git: drawGit, ship: drawShip, sessions: drawSessions, checks: drawChecks, hooks: drawHooks, projects: drawProjectsPage, setup: drawSetup };
+const PAGES = { claude: drawClaude, git: drawGit, ship: drawShip, sessions: drawSessions, checks: drawChecks, hooks: drawHooks, projects: drawProjectsPage, setup: drawSetup, update: drawUpdate };
 const keyOf = (h) => h.kind === 'action' ? 'x:' + h.title : h.kind === 'memory' ? 'm:' + h.m.f : h.kind === 'skill' ? `s:${h.sk.scope}/${h.sk.name}` : h.kind === 'rule' ? 'r:' + JSON.stringify(h.ref) : h.kind === 'audit' ? 'a:' + (h.a.path || h.a.slug) : 'w:' + h.e.slug;
-const HINT = { all: 'Search everything, or type > for actions', memory: 'Search memories', skill: 'Search skills', audit: 'Search audits', hooks: 'Filter the hooks', claude: 'Type > for actions', git: 'Filter files or commits', projects: 'Projects', setup: 'Set up a harness', rule: 'Search rules', work: 'Search the work log', ship: 'Filter the open rows', sessions: 'Sessions', checks: 'Filter the probes' };
+const HINT = { all: 'Search everything, or type > for actions', memory: 'Search memories', skill: 'Search skills', audit: 'Search audits', hooks: 'Filter the hooks', claude: 'Type > for actions', git: 'Filter files or commits', projects: 'Projects', setup: 'Set up a harness', update: 'Updates', rule: 'Search rules', work: 'Search the work log', ship: 'Filter the open rows', sessions: 'Sessions', checks: 'Filter the probes' };
 let LEDGER = null, AUDIT = null, PROJ = { names: [], current: 0 };
 const openRows = () => { const st = D.ledger.status || {}; return D.ledger.total - ['shipped', 'verified', 'superseded', 'n/a'].reduce((n, k) => n + (st[k] || 0), 0); };
 let D = null, ITEMS = [], tab = 'all', hits = [], sel = 0, editing = null;
@@ -356,7 +356,7 @@ function boot(force) {
   const pad = (s, n) => String(s).padEnd(n);
   const line = (lvl, what, val) => `<span class="${lvl === 'ok' ? 'k' : lvl === 'warn' ? 'w' : 'f'}">[ ${lvl === 'ok' ? ' OK ' : lvl === 'warn' ? 'WARN' : 'FAIL'} ]</span> ${pad(what, 14)}<span class="d">${esc(val)}</span>`;
   const lines = [
-    `<span class="a">maestro</span> <span class="d">0.1 · ${esc(D.project.root)}</span>`,
+    `<span class="a">maestro</span> <span class="d">${esc(UPD.current || '')} · ${esc(D.project.root)}</span>`,
     line('ok', 'project', D.project.name),
     line(D.sizes.projClaude ? 'ok' : 'warn', 'instructions', `${D.project.instructions} ${num(D.sizes.projClaude)} · yours ${num(D.sizes.userClaude)}`),
     line('ok', 'memory', `${D.memories.length} files · index ${num(D.sizes.memoryIndex)}`),
@@ -540,8 +540,19 @@ function makeTerm(el, chords) {
   // ("52;<which>;<base64>") when the button is released. In PowerShell, or with Shift held, the terminal itself selects.
   term.parser.registerOscHandler(52, (data) => { const b64 = data.slice(data.indexOf(';') + 1); if (!b64 || b64 === '?') return true; try { const bin = atob(b64); const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0)); copyText(new TextDecoder('utf-8').decode(bytes)); } catch (_) {} return true; });
   let selT = null; term.onSelectionChange(() => { clearTimeout(selT); selT = setTimeout(() => { const t = term.getSelection(); if (t && t.trim()) copyText(t); }, 300); });
-  // Ctrl+Shift+C copies what is selected, Ctrl+Shift+V pastes; the console's own chords are taken; everything else goes to the program
-  term.attachCustomKeyEventHandler((e) => { if (e.type !== 'keydown') return true; if (e.ctrlKey && e.shiftKey) { const k = e.key.toLowerCase(); if (k === 'c') { const t = term.getSelection(); if (t) navigator.clipboard.writeText(t).catch(() => {}); return false; } if (k === 'v') { navigator.clipboard.readText().then((t) => { if (t) term.paste(t); }).catch(() => {}); return false; } } if (chords && chords(e)) { e.preventDefault(); return false; } return true; });
+  // Pasting. The text goes in as ONE paste (term.paste marks its start and end when the program asked for that, which is how
+  // Claude Code knows to show "[Pasted text +12 lines]" instead of taking every line as typed). The clipboard is read by the
+  // page, or by the app when the page is refused. `otherwise` is what the key means when there is no text to paste: Ctrl+V with
+  // a picture on the clipboard is still Claude Code's own "paste an image".
+  const pasteNow = (otherwise) => { const put = (t) => { if (t) term.paste(t); else if (otherwise) term.input(otherwise, true); }; const viaApp = () => invoke('clip_get').then(put, () => put('')); try { navigator.clipboard.readText().then((t) => (t ? put(t) : viaApp()), viaApp); } catch (_) { viaApp(); } };
+  el.addEventListener('contextmenu', (e) => { e.preventDefault(); if (!term.hasSelection()) pasteNow(); });
+  // Ctrl+Shift+C copies what is selected; Ctrl+V, Ctrl+Shift+V and Shift+Insert paste, and so does a right click; the console's
+  // own chords are taken; everything else goes to the program
+  term.attachCustomKeyEventHandler((e) => { if (e.type !== 'keydown') return true; const k = e.key.toLowerCase();
+    if (e.ctrlKey && e.shiftKey && !e.altKey && k === 'c') { const t = term.getSelection(); if (t) navigator.clipboard.writeText(t).catch(() => {}); return false; }
+    if (e.ctrlKey && !e.altKey && k === 'v') { e.preventDefault(); pasteNow(e.shiftKey ? '' : '\x16'); return false; }
+    if (e.shiftKey && !e.ctrlKey && !e.altKey && k === 'insert') { e.preventDefault(); pasteNow(); return false; }
+    if (chords && chords(e)) { e.preventDefault(); return false; } return true; });
   return { term, fit };
 }
 function ccFit(x) { if (!x || x.tile.hidden || !x.body.offsetWidth) return; try { x.fit.fit(); } catch (_) {} }
@@ -624,7 +635,7 @@ function drawLauncher() {
     ${PROJ.names.length > 1 ? `<h2>${projOrder().favs.length ? 'One click, your favourites' : 'One click, any project'}</h2><div class="matrix">${(projOrder().favs.length ? projOrder().favs : projOrder().rest.slice(0, 8)).map((i) => [PROJ.names[i], i]).map(([n, i]) => `<span class="n"><button class="star${isFav(i) ? ' on' : ''}" data-fav="${i}" title="${isFav(i) ? 'Take it off your favourites' : 'Make it a favourite: it stays in this list and comes first in every project picker'}" aria-label="${isFav(i) ? 'Take ' + esc(n) + ' off your favourites' : 'Make ' + esc(n) + ' a favourite'}" aria-pressed="${isFav(i)}">${isFav(i) ? '★' : '☆'}</button>${esc(n)}</span><button class="act" data-cterm="claude" data-p="${i}">${kindMark('claude')}Claude</button>${PROJ.native && PROJ.native[i] ? '<span></span>' : `<button class="act" data-cterm="ubuntu" data-p="${i}">${kindMark('ubuntu')}Ubuntu</button>`}<button class="act" data-cterm="powershell" data-p="${i}">${kindMark('powershell')}PowerShell</button>`).join('')}</div>${projOrder().rest.length > (projOrder().favs.length ? 0 : 8) ? `<div class="row" style="margin-top:8px"><select class="in" id="favadd" aria-label="Add a favourite"><option value="">${projOrder().favs.length ? 'Add a favourite…' : 'Star another project…'}</option>${projOrder().rest.map((i) => `<option value="${i}">${esc(PROJ.names[i])}</option>`).join('')}</select><span class="dim">Favourites stay in this list and come first in every project picker.</span></div>` : ''}` : ''}</div>
     <div class="col">${away.length ? `<h2>Still running, not on screen${away.length > 1 ? ` <button data-cattall style="background:none;border:0;color:var(--accent);font:inherit;cursor:pointer;margin-left:8px">open all ${away.length}</button>` : ''}</h2>${away.map((r) => `<div class="sess" role="button" tabindex="0" data-catt="${esc(r.name)}" data-kind="${esc(r.kind)}" data-label="${esc(r.label)}" data-path="${esc(r.path)}" title="Open it again, scroll-back and all">${kindMark(r.kind)}<span><span class="t">${esc(r.label || r.name)}</span><span class="s">${esc(r.path.split('/').pop())} · started ${sinceWord(r.created)}${r.attached ? ' · open in another window' : ''}</span></span><span class="x" data-ckill="${esc(r.name)}" title="End this session">×</span></div>`).join('')}` : ''}
     ${old.length ? `<h2>Resume an earlier conversation in ${esc(pn)}</h2>${old.map((s2) => `<button class="old" data-cres="${esc(s2.id)}" title="Resume this conversation"><span class="t">${esc(s2.ask)}</span><span class="s">${esc(when(s2.up))}</span></button>`).join('')}` : ''}
-    <h2>Keys</h2><div class="keys"><span><kbd>Alt</kbd> <kbd>1</kbd>…<kbd>9</kbd>, <kbd>Ctrl</kbd> <kbd>Tab</kbd></span><span>switch session</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>N</kbd> / <kbd>U</kbd> / <kbd>P</kbd></span><span>new Claude, Ubuntu, PowerShell</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>A</kbd> / <kbd>L</kbd></span><span>all at a glance, side by side</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>O</kbd></span><span>the session in its own window</span><span>Highlight text</span><span>copies it</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>V</kbd></span><span>paste</span></div>
+    <h2>Keys</h2><div class="keys"><span><kbd>Alt</kbd> <kbd>1</kbd>…<kbd>9</kbd>, <kbd>Ctrl</kbd> <kbd>Tab</kbd></span><span>switch session</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>N</kbd> / <kbd>U</kbd> / <kbd>P</kbd></span><span>new Claude, Ubuntu, PowerShell</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>A</kbd> / <kbd>L</kbd></span><span>all at a glance, side by side</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>O</kbd></span><span>the session in its own window</span><span>Highlight text</span><span>copies it</span><span><kbd>Ctrl</kbd> <kbd>V</kbd> or right click</span><span>paste</span></div>
     <p style="margin-top:14px;font-size:12.5px">${nat ? 'In a project that runs on Windows itself, sessions end with Maestro.' : 'Claude and Ubuntu sessions keep running when Maestro closes and come back when it starts. PowerShell ends with Maestro.'}</p></div>`;
   const ta = $('#cprompt'); if (ta && keep) ta.value = keep;
 }
@@ -684,6 +695,7 @@ function actions() {
   for (const [k, t] of TABS) add(`Open ${t === 'All' ? 'the home screen' : t} in its own window`, 'A separate window you can move to another screen', () => popView(k));
   PROJ.names.forEach((n, i) => { if (i !== PROJ.current) add(`Open ${n}`, 'Switch project', () => setProject(i)); });
   add('Add or remove a project', 'The list of folders this app opens', () => { FOUND = null; setTab('projects'); });
+  add('Check for updates', `This is Maestro ${UPD.current || ''}. Asks GitHub whether a newer release is out`, () => { UPD.checked = false; setTab('update'); });
   add('Set up a starter harness', 'Instructions, rules, a work log and three skills, written only where they are missing', () => { PLAN = null; setTab('setup'); });
   if (D.project.kit) add('Run the probe audit', 'About twenty seconds; shows which passes still count', () => { setTab('checks'); const b = $('[data-audit]'); if (b) b.click(); });
   add('Read the files again', 'Reload everything from disk', () => reload().then(() => { drawList(); say('Read again from the files', 'ok'); }));
@@ -710,6 +722,7 @@ function drawHome() {
   if ((st.uncommitted || 0) > 0) N.push(['warn', 'Loose', `${st.uncommitted} pieces of work are recorded as not committed`, 'Some are old words on old rows; the rest exist only in a working tree.', 'ship']);
   if (D.sessions.live > 1) N.push(['warn', 'Open', `${D.sessions.live} sessions are live or ended without a record`, `${D.sessions.abandoned} older ones were left for over 48 hours.`, 'sessions']);
   if (D.project.kit && D.sizes.projClaude > 14000) N.push(['warn', 'Tight', `${D.project.instructions} is ${num(D.sizes.projClaude)} of 15,000 characters`, 'The next headline may not fit.', 'work']);
+  if (UPD.newer) N.push(['warn', 'Update', `Maestro ${UPD.latest} is available`, `This is ${UPD.current}. Read what changed and install it in one step.`, 'update']);
   if (D.project.bare) N.push(['warn', 'No harness', 'This project has no instructions, rules or skills yet', 'Set up a starter in one step: an instructions file, a rules file, a work log and three skills. You see every file before it is written.', 'setup']);
   // ledger by stage
   const stage = { uncommitted: (st.uncommitted || 0) + (st.mixed || 0) + (st.unknown || 0) + (st.pending || 0), committed: st.committed || 0, pushed: st.pushed || 0, deployed: st.deployed || 0, closed };
@@ -869,6 +882,21 @@ function drawProjectsPage() {
   <span></span><div class="row">${f.already ? '<span class="warn">This folder is already in the list.</span>' : '<button class="act go" data-addproj>Add and open</button>'}</div>` : `<span></span><span class="dim">Pick the folder; the rest is worked out from it, and you see what was found before anything is added.</span>`}</div>`;
 }
 let MACHINE = null, PLAN = null;
+// Updates. Nothing is asked of the network until this screen is opened, unless "check when Maestro starts" was turned on.
+let UPD = { current: '', auto: false, checked: false };
+async function updCheck(quiet) { try { const r = await invoke('update_check'); UPD = { ...UPD, ...r, checked: true, error: '' }; } catch (e) { UPD = { ...UPD, checked: true, error: String(e), newer: false }; if (!quiet) say(String(e), 'bad'); } }
+async function drawUpdate() {
+  const v = $('#view'); const head = `<h1>Updates</h1>`;
+  if (!UPD.checked) { v.innerHTML = `${head}<p class="lead">Asking GitHub for the latest release…</p>`; await updCheck(true); if (tab !== 'update') return; }
+  const U = UPD; const ends = CC.list.filter((x) => x.live && !x.keeps).length;
+  v.innerHTML = `${head}<p class="lead">This is Maestro ${esc(U.current)}. ${U.error ? `<span class="bad">${esc(U.error)}</span>` : U.newer ? `<b>Version ${esc(U.latest)} is available</b>${U.published ? `, published ${esc(String(U.published).slice(0, 10))}` : ''}.` : `It is the latest release.`}</p>
+  ${U.newer ? `<div class="row" style="margin-bottom:6px">${U.asset ? `<button class="act go" data-updgo>Install ${esc(U.latest)} and restart</button>` : ''}<button class="act" data-updpage="${esc(U.tag)}">Open the release page</button></div>
+  <p class="dim" style="max-width:78ch">${U.asset ? `Installing downloads the build from this project's GitHub releases, puts it in place of this program and starts it again. Your projects and settings are kept. ${ends ? `It ends ${ends} session${ends === 1 ? '' : 's'} that run${ends === 1 ? 's' : ''} on Windows; sessions inside WSL keep running and come back.` : 'Sessions inside WSL keep running and come back.'} The download is not signed: if you would rather build it yourself, open the release page.` : 'This release carries no ready build: open its page to see how to get it.'}</p>
+  ${U.notes ? `<h3 class="sec">What changed in ${esc(U.latest)}</h3><div class="text">${rich(U.notes)}</div>` : ''}` : `<div class="row"><button class="act" data-updagain>Check again</button></div>`}
+  <p style="margin:18px 0 0"><label class="chk"><input type="checkbox" id="updauto"${U.auto ? ' checked' : ''}> Check when Maestro starts</label></p>
+  <p class="dim" style="max-width:78ch;margin-top:6px">Off, Maestro never uses the network on its own; it asks only when you open this screen. On, it asks GitHub once at each start which release is the latest. Nothing about you or your projects is sent.</p>`;
+}
+
 // The starter harness: what would be written, shown before anything is. Files that exist are never replaced.
 async function drawSetup() {
   const v = $('#view');
@@ -890,6 +918,7 @@ async function setProject(i) {
 document.addEventListener('auxclick', (e) => { const vt = e.button === 1 && e.target.closest && e.target.closest('[data-tab]'); if (vt) { e.preventDefault(); return popView(vt.dataset.tab); } const b = e.button === 1 && e.target.closest && e.target.closest('.stab'); if (b) { e.preventDefault(); ccCloseTab(b.dataset.csel); } });
 document.addEventListener('change', (e) => { if (e.target.id === 'cproj' || e.target.id === 'cproj2') { CC.proj = Number(e.target.value); drawDock(); if (CC.launch || !CC.list.length) { drawLauncher(); const ta = $('#cprompt'); if (ta) ta.focus(); } return; }
   if (e.target.id === 'grepo') { const name = e.target.value; const repos = G.repos; gitReset(); G.repos = repos; G.repo = name; drawTabs(); return drawGit(); }
+  if (e.target.id === 'updauto') return invoke('update_auto_set', { on: e.target.checked }).then((on) => { UPD.auto = !!on; say(on ? 'Maestro will check for updates when it starts' : 'Maestro will only check when you ask', 'ok'); }).catch((err) => { e.target.checked = !e.target.checked; say(String(err), 'bad'); });
   if (e.target.id === 'favadd') { if (e.target.value !== '') setFav(Number(e.target.value), true); return; }
   if (e.target.id === 'p-runs') return look(FOUND.typed, e.target.value);
   if (e.target.id === 'pj') { if (e.target.value === 'manage') { e.target.value = String(PROJ.current); FOUND = null; return setTab('projects'); } setProject(Number(e.target.value)); } if (e.target.id === 'auto') invoke('autostart_set', { on: e.target.checked }).then((on) => { e.target.checked = !!on; say(on ? 'Maestro will start with Windows' : 'Maestro will not start with Windows', 'ok'); }).catch((err) => { e.target.checked = !e.target.checked; say(String(err), 'bad'); }); });
@@ -935,6 +964,9 @@ document.addEventListener('click', (e) => {
   if (t.closest('[data-browse]')) return invoke('pick_folder').then((f) => { if (f) look(f); }).catch((err) => say(String(err), 'bad'));
   if (t.closest('[data-look]')) return look($('#p-folder').value);
   if (t.closest('[data-addproj]')) return invoke('add_project', { folder: FOUND.typed, name: $('#p-name').value, runs: FOUND.entry.runs }).then(async (at) => { FOUND = null; LEDGER = null; AUDIT = null; PLAN = null; gitReset(); tab = 'all'; await drawProjects(); await reload(); if (D.project.bare) tab = 'setup'; fitTabs(); nameView(); drawTabs(); drawList(); say(`Added and opened ${PROJ.names[at]}`, 'ok'); $('#q').focus(); }).catch((err) => say(String(err), 'bad'));
+  if (t.closest('[data-updagain]')) { UPD.checked = false; return drawUpdate(); }
+  if (t.closest('[data-updpage]')) return invoke('update_page', { tag: t.closest('[data-updpage]').dataset.updpage }).catch((err) => say(String(err), 'bad'));
+  if (t.closest('[data-updgo]')) { const b = t.closest('[data-updgo]'); if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = `Confirm: install ${UPD.latest} and restart now`; return; } b.disabled = true; b.textContent = 'Downloading…'; return invoke('update_install').then((tag) => say(`Installed ${tag}; restarting`, 'ok')).catch((err) => { b.disabled = false; delete b.dataset.sure; b.textContent = `Install ${UPD.latest} and restart`; say(String(err), 'bad'); }); }
   if (t.closest('[data-layout]')) return invoke('starter_plan', { layout: t.closest('[data-layout]').dataset.layout }).then((pl) => { PLAN = pl; drawSetup(); }).catch((err) => say(String(err), 'bad'));
   if (t.closest('[data-peek]')) { PLAN.open = PLAN.open === t.closest('[data-peek]').dataset.peek ? null : t.closest('[data-peek]').dataset.peek; return drawSetup(); }
   if (t.closest('[data-starter]')) { const b = t.closest('[data-starter]'); b.disabled = true; return invoke('starter_apply', { layout: PLAN.layout }).then(async (r) => { PLAN = null; tab = 'all'; await reload(); nameView(); drawList(); say(`Wrote ${r.written.length} file${r.written.length === 1 ? '' : 's'}${r.kept.length ? `; ${r.kept.length} already there were left alone` : ''}`, 'ok'); }).catch((err) => { b.disabled = false; say(String(err), 'bad'); }); }
@@ -979,7 +1011,7 @@ T.event.listen('shown', () => { G.seen = true; if (tab === 'git') gitCheck(true)
 const POP = window.__POP || null; const VIEW = window.__VIEW || null;
 if (VIEW) { document.body.classList.add('view'); tab = VIEW.tab; }
 const nameView = () => { if (VIEW && document.getElementById('vtitle')) document.getElementById('vtitle').textContent = tab === 'projects' ? 'Projects' : tab === 'all' ? 'Home' : tabName(tab); };
-const tabName = (k) => k === 'setup' ? 'Set up a harness' : (ALL_TABS.find(([x]) => x === k) || [k, k])[1];
+const tabName = (k) => k === 'setup' ? 'Set up a harness' : k === 'update' ? 'Updates' : (ALL_TABS.find(([x]) => x === k) || [k, k])[1];
 if (POP) {
   document.body.classList.add('pop'); const el = document.createElement('div'); el.className = 'popterm'; document.body.appendChild(el);
   const id = `p${Math.random().toString(36).slice(2, 9)}`; const { term, fit } = makeTerm(el, null); let live = true;
@@ -990,6 +1022,7 @@ if (POP) {
   term.onResize(({ cols, rows }) => { if (live) invoke('term_resize', { id, cols, rows }).catch(() => {}); });
   requestAnimationFrame(() => requestAnimationFrame(() => { refit(); invoke('term_open', { id, kind: POP.kind === 'claude' ? 'claude' : 'ubuntu', mode: 'attach', proj: null, name: POP.name, session: null, prompt: null, label: POP.label, cols: term.cols, rows: term.rows }).catch((e) => term.write(`\r\n\x1b[31m${String(e)}\x1b[0m\r\n`)); term.focus(); }));
 }
+if (!POP) invoke('update_state').then((u) => { UPD = { ...UPD, ...(u || {}) }; if (UPD.auto && !VIEW) updCheck(true).then(() => { if (UPD.newer && tab === 'all' && !$('#q').value) drawList(); }); }).catch(() => {});
 if (!POP) drawProjects().then(reload).then(() => { nameView(); if (!VIEW && !D.empty) { ccRestore().catch(() => {}); try { boot(false); } catch (e) { trouble(`boot: ${e.stack || e}`); } try { if (localStorage.getItem('pin') === '1') { invoke('set_on_top', { on: true }); $('[data-pin]').setAttribute('aria-pressed', 'true'); } } catch (_) {} } $('#hk').innerHTML = `<kbd>${esc(D.hotkey || 'Ctrl+Shift+Space')}</kbd> anywhere`; drawList(); $('#q').focus(); }).catch((e) => { $('#view').innerHTML = `<p class="bad">${esc(String(e))}</p>`; });
 </script>
 </body>

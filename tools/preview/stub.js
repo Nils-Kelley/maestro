@@ -100,8 +100,12 @@
     term_check: () => ({ native: false, distro: 'Ubuntu', tmux: true, claude: true }),
     term_list: () => Object.values(terms).filter((t) => t.kind !== 'powershell').map((t) => ({ name: t.name, created: now - 600, kind: t.kind, label: t.label, path: '/mnt/d/projects/tidepool', attached: true })),
     term_open: (o) => { const name = o.kind === 'powershell' ? '' : `maestro-tidepool-${o.kind}-${Date.now()}`; terms[o.id] = { name, kind: o.kind, label: o.label }; setTimeout(() => script[o.kind] && script[o.kind](o.id, o), 60); return name; },
-    term_write: ({ id, data }) => { say(id, data === '\r' ? '\r\n' : data); return null; },
+    clip_get: () => window.__PREVIEW.clipboard || '',
+    term_write: ({ id, data }) => { (window.__PREVIEW.written = window.__PREVIEW.written || []).push(data); say(id, data === '\r' ? '\r\n' : data); return null; },
     term_close: ({ id }) => { delete terms[id]; emit('term-exit', { id }); return null; },
+    update_state: () => ({ current: '0.2.0', auto: false, repo: 'example/maestro' }),
+    update_check: () => ({ current: '0.2.0', latest: '0.3.0', tag: 'v0.3.0', newer: !new URLSearchParams(location.search).has('uptodate'), notes: '## Added\n- Sessions can be renamed from their tab\n- The Git tab shows stashes\n\n## Fixed\n- A tile kept its old size after the window was restored', published: day(2) + 'T10:00:00Z', asset: 'https://github.com/example/maestro/releases/download/v0.3.0/maestro-windows-x64.zip', auto: false }),
+    update_auto_set: ({ on }) => on, update_page: () => null, update_install: () => '0.3.0',
     autostart_get: () => false, autostart_set: ({ on }) => on,
     note: ({ text }) => { console.warn('[maestro.log]', text); return null; },
   };
@@ -109,5 +113,5 @@
     core: { invoke: (cmd, args) => new Promise((ok, no) => { try { ok(api[cmd] ? api[cmd](args || {}) : null); } catch (e) { no(String(e)); } }) },
     event: { listen: (ev, h) => { (handlers[ev] = handlers[ev] || []).push(h); return Promise.resolve(() => {}); } },
   };
-  window.__PREVIEW = { emit, scene };
+  window.__PREVIEW = { emit, scene, clipboard: '', written: [] };
 })();

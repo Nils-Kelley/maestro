@@ -3,7 +3,16 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 [Semantic Versioning](https://semver.org).
 
-## [0.1.0] - unreleased
+## [0.2.0] - 2026-11-19
+
+### Added
+- Updates: `> Check for updates` asks GitHub for the latest release, shows what changed and installs it in one step. Checking
+  at start is opt-in ("Check when Maestro starts"); a newer version then shows on the home screen.
+- `Ctrl+V`, `Shift+Insert` and a right click paste into a session, as one paste; the clipboard is read by the app when the
+  page is refused. Before, plain `Ctrl+V` sent a control key instead of the text.
+- Projects can be starred and unstarred from the Console's one-click list, and any project added to it from a picker there.
+
+## [0.1.0] - 2026-11-19
 
 The first public version.
 

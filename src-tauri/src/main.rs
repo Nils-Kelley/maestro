@@ -1253,6 +1253,121 @@ fn set_project(i: usize, cur: State<Cur>, window: tauri::WebviewWindow) -> Resul
     Ok(())
 }
 
+// ---- updates: asked for by the user (or at start, if they turned that on). Nothing else in this program uses the network. ----
+/// The repository whose published releases this build updates from. A fork that publishes its own releases changes this line.
+const REPO: &str = "Nils-Kelley/maestro";
+const ASSET: &str = "maestro-windows-x64.zip";
+/// Windows' own curl.exe and tar.exe, by their full path so that nothing else on PATH can stand in for them.
+fn system_tool(name: &str) -> PathBuf {
+    PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into())).join("System32").join(name)
+}
+fn fetch(url: &str, to: Option<&Path>) -> Result<Vec<u8>, String> {
+    let mut c = std::process::Command::new(system_tool("curl.exe"));
+    c.args(["--silent", "--show-error", "--fail", "--location", "--max-time", "120", "--proto", "=https", "--user-agent", "maestro-update-check", "--header", "Accept: application/vnd.github+json"]);
+    if let Some(f) = to { c.arg("--output").arg(f); }
+    c.arg(url);
+    let out = quiet(c).output().map_err(|e| format!("curl.exe could not be started ({e}): it is part of Windows 10 and 11"))?;
+    if !out.status.success() {
+        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if why.contains("404") { "no release has been published yet".into() } else { format!("could not reach GitHub: {why}") });
+    }
+    Ok(out.stdout)
+}
+/// 0.10.1 is newer than 0.9.4: compared number by number, a leading "v" and anything after a dash ignored.
+fn newer(latest: &str, current: &str) -> bool {
+    let nums = |v: &str| v.trim().trim_start_matches('v').split('-').next().unwrap_or("").split('.').map(|n| n.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let (a, b) = (nums(latest), nums(current));
+    (0..a.len().max(b.len())).map(|i| (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0))).find(|(x, y)| x != y).map(|(x, y)| x > y).unwrap_or(false)
+}
+/// The latest published release: its version, its notes, and the address of the build if it carries one.
+fn latest_release() -> Result<Value, String> {
+    let raw = fetch(&format!("https://api.github.com/repos/{REPO}/releases/latest"), None)?;
+    let r: Value = serde_json::from_slice(&raw).map_err(|e| format!("GitHub's answer could not be read: {e}"))?;
+    let tag = r["tag_name"].as_str().ok_or("GitHub's answer names no release")?.to_string();
+    let want = format!("https://github.com/{REPO}/releases/download/");
+    let asset = r["assets"].as_array().and_then(|a| a.iter().find(|x| x["name"] == ASSET)).and_then(|x| x["browser_download_url"].as_str()).filter(|u| u.starts_with(&want)).map(|u| u.to_string());
+    let current = env!("CARGO_PKG_VERSION");
+    Ok(json!({ "current": current, "latest": tag.trim_start_matches('v'), "tag": tag, "newer": newer(&tag, current), "notes": r["body"].as_str().unwrap_or("").chars().take(6000).collect::<String>(), "published": r["published_at"], "asset": asset }))
+}
+/// Ask GitHub whether a newer release has been published. This is the app's only network request, and it is made only here.
+#[tauri::command(async)]
+fn update_check() -> Result<Value, String> {
+    let mut v = latest_release()?;
+    v["auto"] = json!(config()["checkUpdates"].as_bool().unwrap_or(false));
+    Ok(v)
+}
+/// What this build is, without asking anyone.
+#[tauri::command]
+fn update_state() -> Value {
+    json!({ "current": env!("CARGO_PKG_VERSION"), "auto": config()["checkUpdates"].as_bool().unwrap_or(false), "repo": REPO })
+}
+/// Check at start, or only when asked (the default).
+#[tauri::command]
+fn update_auto_set(on: bool) -> Result<bool, String> {
+    let mut c = config();
+    c["checkUpdates"] = json!(on);
+    save_config(&c)?;
+    Ok(on)
+}
+/// Open the release's page in the browser.
+#[tauri::command]
+fn update_page(tag: String) -> Result<(), String> {
+    if tag.is_empty() || !tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') { return Err("not a release".into()); }
+    let mut c = std::process::Command::new(system_tool("..\\explorer.exe"));
+    c.arg(format!("https://github.com/{REPO}/releases/tag/{tag}"));
+    quiet(c).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+/// Put a downloaded build in the place of this one. The running program cannot be overwritten but it can be renamed: it is moved
+/// aside as maestro.exe.old (removed at the next start), the new one takes its name, and a failure puts the old one back.
+fn swap_in(dir: &Path, exe: &Path) -> Result<(), String> {
+    let new_exe = dir.join("maestro.exe");
+    let size = fs::metadata(&new_exe).map(|m| m.len()).map_err(|_| "the download holds no maestro.exe")?;
+    if size < 1_000_000 { return Err("the downloaded maestro.exe is too small to be the program".into()); }
+    let here = exe.parent().ok_or("this program has no folder")?;
+    let mut done: Vec<(PathBuf, PathBuf)> = vec![]; // (file, where the old one went)
+    let put = |name: &str, target: &Path, done: &mut Vec<(PathBuf, PathBuf)>| -> Result<(), String> {
+        let old = target.with_extension(format!("{}.old", target.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default()));
+        let _ = fs::remove_file(&old);
+        if target.exists() { fs::rename(target, &old).map_err(|e| format!("{} could not be moved aside: {e}", name_of(target)))?; }
+        done.push((target.to_path_buf(), old));
+        fs::copy(dir.join(name), target).map(|_| ()).map_err(|e| format!("{name} could not be written: {e}"))
+    };
+    let mut result = put("maestro.exe", exe, &mut done);
+    if result.is_ok() && dir.join("WebView2Loader.dll").exists() { result = put("WebView2Loader.dll", &here.join("WebView2Loader.dll"), &mut done); }
+    if let Err(e) = result {
+        for (target, old) in done.iter().rev() { let _ = fs::remove_file(target); let _ = fs::rename(old, target); }
+        return Err(e);
+    }
+    Ok(())
+}
+/// Download the latest release, put it in place of this program and start it. The address comes from GitHub's answer here, never
+/// from the page. The download is fetched over HTTPS from this repository's releases; it is not signed.
+#[tauri::command(async)]
+fn update_install(app: tauri::AppHandle) -> Result<String, String> {
+    let r = latest_release()?;
+    if r["newer"] != true { return Err(format!("this is already the latest version ({})", r["current"].as_str().unwrap_or(""))); }
+    let url = r["asset"].as_str().ok_or("that release carries no build to download: open its page instead")?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = std::env::temp_dir().join(format!("maestro-update-{}", r["latest"].as_str().unwrap_or("x")));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let zip = dir.join(ASSET);
+    fetch(url, Some(&zip))?;
+    let mut c = std::process::Command::new(system_tool("tar.exe"));
+    c.arg("-xf").arg(&zip).arg("-C").arg(&dir);
+    let out = quiet(c).output().map_err(|e| format!("tar.exe could not be started ({e})"))?;
+    if !out.status.success() { return Err(format!("the download could not be unpacked: {}", String::from_utf8_lossy(&out.stderr).trim())); }
+    swap_in(&dir, &exe)?;
+    let _ = fs::remove_dir_all(&dir);
+    // start the new one once this one has gone (a second copy started now would only wake this one and leave)
+    let mut c = std::process::Command::new("powershell.exe");
+    c.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", "Start-Sleep -Milliseconds 1500; Start-Process -FilePath $env:MAESTRO_EXE"]).env("MAESTRO_EXE", &exe);
+    quiet(c).spawn().map_err(|e| format!("the update is in place, but Maestro could not be restarted ({e}): start it yourself"))?;
+    let tag = r["latest"].as_str().unwrap_or("").to_string();
+    std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(400)); app.exit(0); });
+    Ok(tag)
+}
+
 const RUN_KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 /// Does Windows start Maestro at sign-in?
 #[tauri::command]
@@ -1574,6 +1689,14 @@ fn clip_set(text: String) -> Result<(), String> {
     child.stdin.take().ok_or("no pipe to clip.exe")?.write_all(&bytes).map_err(|e| e.to_string())?;
     child.wait().map(|_| ()).map_err(|e| e.to_string())
 }
+/// The text on the Windows clipboard (used when the page's own clipboard call is refused). Empty when it holds no text.
+#[tauri::command(async)]
+fn clip_get() -> Result<String, String> {
+    let mut c = std::process::Command::new("powershell.exe");
+    c.args(["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $t = Get-Clipboard -Raw; if ($t) { [Console]::Out.Write($t) }"]);
+    let out = quiet(c).output().map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
 /// An error the page caught goes into maestro.log beside the config, so a blank or stuck screen leaves a trace.
 #[tauri::command]
 fn note(text: String) {
@@ -1663,6 +1786,10 @@ fn main() {
             })
             .build(app)?;
 
+            // what an update left behind: the program it replaced
+            if let Some(here) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
+                for name in ["maestro.exe.old", "Maestro.exe.old", "WebView2Loader.dll.old"] { let _ = fs::remove_file(here.join(name)); }
+            }
             // started by Windows at sign-in: stay in the tray until the key is pressed
             if !std::env::args().any(|a| a == "--hidden") {
                 reveal(app.handle());
@@ -1670,7 +1797,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, minimize, hide, quit
+            load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit
         ])
         .run(tauri::generate_context!())
         .expect("Maestro could not start");
@@ -1839,6 +1966,69 @@ mod tests {
             println!("term.sh --list: {} sessions", String::from_utf8_lossy(&c.output().unwrap().stdout).lines().filter(|l| ours(l.split('\t').next().unwrap_or(""))).count());
         }
         let _ = fs::remove_dir_all(&d);
+    }
+    /// What GitHub answers right now (not run by default: it uses the network).   cargo test github -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn github_is_asked_for_the_latest_release() {
+        match latest_release() {
+            Ok(v) => println!("latest: {} newer: {} asset: {}", v["latest"], v["newer"], v["asset"]),
+            Err(e) => println!("answer: {e}"),
+        }
+    }
+    /// Does a paste survive the trip? A program inside WSL turns bracketed paste on and echoes what it is sent; this prints
+    /// whether the request reaches the terminal's side and whether the paste marks reach the program.   cargo test paste -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn a_bracketed_paste_through_the_windows_terminal_layer() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::{Read, Write};
+        let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 100, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut cmd = CommandBuilder::new("wsl.exe");
+        if std::env::var("PASTE_VIA_TMUX").is_ok() { cmd.args(["--exec", "bash", "/tmp/mp-outer.sh"]); } else { cmd.args(["--exec", "bash", "-c", "printf '\\033[?2004h'; stty raw -echo; echo READY; head -c 30 | cat -v; echo; echo DONE"]); }
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || { let mut b = [0u8; 4096]; while let Ok(n) = reader.read(&mut b) { if n == 0 || tx.send(b[..n].to_vec()).is_err() { break; } } });
+        let mut seen = String::new();
+        let mut sent = false;
+        let start = std::time::Instant::now();
+        while start.elapsed().as_secs() < 12 {
+            if let Ok(chunk) = rx.recv_timeout(std::time::Duration::from_millis(300)) { seen.push_str(&String::from_utf8_lossy(&chunk)); }
+            if !sent && seen.contains("READY") { writer.write_all(b"\x1b[200~line one\rline two\x1b[201~....").unwrap(); writer.flush().unwrap(); sent = true; }
+            if seen.contains("DONE") { break; }
+        }
+        let _ = child.kill();
+        println!("the path: {}", if std::env::var("PASTE_VIA_TMUX").is_ok() { "through tmux" } else { "straight into WSL" });
+        println!("the terminal side was asked for bracketed paste: {}", seen.contains("\x1b[?2004h"));
+        println!("the program received: {:?}", seen.split("READY").nth(1).unwrap_or("").replace('\x1b', "<ESC>"));
+    }
+    #[test]
+    fn versions_are_compared_number_by_number() {
+        assert!(newer("v0.10.1", "0.9.4") && newer("0.2.0", "0.1.9") && newer("1.0", "0.9.9"));
+        assert!(!newer("v0.2.0", "0.2.0") && !newer("0.1.9", "0.2.0") && !newer("v0.2.0-rc1", "0.2.0") && !newer("junk", "0.1.0"));
+    }
+    /// A build is swapped in beside the old one, which is kept as .old; a download without the program changes nothing.
+    #[test]
+    fn an_update_is_swapped_in_and_a_bad_one_is_refused() {
+        let (here, dl) = (scratch("swap-here"), scratch("swap-dl"));
+        let exe = here.join("maestro.exe");
+        fs::write(&exe, b"old").unwrap();
+        fs::write(here.join("WebView2Loader.dll"), b"old-dll").unwrap();
+        assert!(swap_in(&dl, &exe).is_err()); // nothing downloaded
+        fs::write(dl.join("maestro.exe"), b"tiny").unwrap();
+        assert!(swap_in(&dl, &exe).is_err());
+        assert_eq!(fs::read(&exe).unwrap(), b"old");
+        fs::write(dl.join("maestro.exe"), vec![7u8; 1_200_000]).unwrap();
+        fs::write(dl.join("WebView2Loader.dll"), b"new-dll").unwrap();
+        swap_in(&dl, &exe).unwrap();
+        assert_eq!(fs::read(&exe).unwrap().len(), 1_200_000);
+        assert_eq!(fs::read(here.join("maestro.exe.old")).unwrap(), b"old");
+        assert_eq!(fs::read(here.join("WebView2Loader.dll")).unwrap(), b"new-dll");
+        assert_eq!(fs::read(here.join("WebView2Loader.dll.old")).unwrap(), b"old-dll");
+        let _ = (fs::remove_dir_all(&here), fs::remove_dir_all(&dl));
     }
     #[test]
     fn git_paths_and_ids_are_checked() {

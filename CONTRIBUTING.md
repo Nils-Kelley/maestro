@@ -36,6 +36,13 @@ Thanks for looking. Maestro is small on purpose: one Rust file, one page. Change
 - **Words in the interface are plain.** Say what a button does; no exclamation marks; no "simply".
 - Commit messages follow Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`).
 
+## Releasing (maintainers)
+
+1. Set the new version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, and add its section to `CHANGELOG.md`.
+2. Commit, then tag it: `git tag v0.3.0 && git push origin main v0.3.0`.
+3. The Release workflow builds `maestro-windows-x64.zip` and attaches it to a **draft** release. Check it, paste the changelog
+   section as the notes, and publish. Only a published release is seen by the app's update check, and the zip must keep that name.
+
 ## Before you open a pull request
 
 1. `cargo test` passes and `cargo build --release` has no warnings.

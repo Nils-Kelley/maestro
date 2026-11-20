@@ -26,12 +26,13 @@ Press **Ctrl+Shift+Space** anywhere and it is there.
   many characters of rules an edit to a given file loads, before the agent hits the limit.
 - **Git, read only.** The branch, every changed file with its diff, the history, the tree. It never stages, commits or pushes.
 
-There is no server and no port. The interface talks to the Rust side over the window's own IPC, the app makes no network
-requests, and nothing in a project changes until you save an edit.
+There is no server and no port. The interface talks to the Rust side over the window's own IPC, the app uses the network only
+when you ask it to check for an update, and nothing in a project changes until you save an edit.
 
 ## Contents
 
 - [Install](#install)
+- [Updating](#updating)
 - [First run](#first-run)
 - [It reads the harness you already have](#it-reads-the-harness-you-already-have)
 - [No harness yet: the starter](#no-harness-yet-the-starter)
@@ -60,6 +61,16 @@ cargo build --release
 ```
 
 The first build takes a few minutes. `install.ps1` is optional: `target\release\maestro.exe` runs where it is.
+
+## Updating
+
+Type `>` and choose **Check for updates**. Maestro asks GitHub which release is the latest, shows what changed, and installs
+it in one step: it downloads the build, puts it in place of the running program and starts again. Your projects and settings
+are kept, and sessions inside WSL keep running.
+
+By default Maestro never checks on its own. Tick "Check when Maestro starts" on that screen if you want to be told; a new
+version then appears on the home screen under "Needs you". The download comes over HTTPS from this repository's releases and is
+not signed. If you built from source, `git pull`, build again and run `tools\install.ps1` instead.
 
 ## First run
 
@@ -161,7 +172,8 @@ In the Console:
 | `Ctrl+Shift+A` / `L` | All sessions at a glance / cycle the tiles |
 | `Ctrl+Shift+O` | The session in a window of its own |
 | `Ctrl+Shift+K` | More ways to start |
-| `Ctrl+Shift+C` / `V` | Copy / paste (highlighting also copies) |
+| `Ctrl+V`, `Shift+Insert`, right click | Paste, as one paste (Claude Code shows it as pasted text). With a picture on the clipboard `Ctrl+V` is Claude Code's own image paste |
+| `Ctrl+Shift+C` | Copy (highlighting also copies) |
 
 Every other key goes to the session.
 
@@ -174,6 +186,7 @@ shape.
 | Field | Meaning |
 | --- | --- |
 | `hotkey` | The key that shows and hides the window, for example `Ctrl+Shift+Space` or `Alt+Space`. Read at start. |
+| `checkUpdates` | `true` to ask GitHub for the latest release at each start. Off unless you turn it on. |
 | `projects[].name`, `root` | The name shown and the folder, as Windows opens it |
 | `projects[].runs` | `wsl` or `windows`: where this project's agent runs |
 | `projects[].wslRoot`, `distro` | The folder as WSL sees it, and the distro (WSL projects) |
@@ -187,13 +200,16 @@ home screen measures and the number of characters it is held against.
 
 ## What Maestro writes
 
-Nothing leaves your machine: the app has no network code and no telemetry. On disk it writes only this:
+Nothing about you or your projects leaves your machine. There is no telemetry. The only network request is the update check:
+one question to GitHub's public API ("which release is the latest?"), made when you open the Updates screen, or at start if you
+turned that on. On disk Maestro writes only this:
 
 - `maestro.config.json` and `maestro.log` (interface errors), beside the program.
 - A memory, skill or rule **when you save an edit**. The first copy of a changed file each day is kept in
   `<harness>/archive/` (skills: `~/.claude/backups/`). A retired rule is kept in `<harness>/archive/retired-laws.md`.
 - The starter harness, when you ask for it: missing files only.
 - `term.sh` and `tmux.conf` in `~/.local/share/maestro/` inside a WSL distro, the first time a session is opened there.
+- A new `maestro.exe`, when you install an update; the one it replaces is kept as `maestro.exe.old` until the next start.
 - `Start with Windows`, when you tick it: one value under the current user's `Run` registry key.
 
 The first thing asked in a session is shown in lists; anything that looks like a pasted login is cut from that line before it
@@ -218,7 +234,7 @@ page's script and builds with the Windows toolchain; `tools/build.sh test` runs 
 
 ## Status and limits
 
-Maestro is at 0.1: used daily by its author, new to everyone else. Known limits:
+Maestro is at 0.2: used daily by its author, new to everyone else. Known limits:
 
 - **Windows only.** Tauri runs on macOS and Linux, but the session layer, the hotkey and the window are written for Windows.
 - **Sessions are Claude Code.** The harness screens read `AGENTS.md` projects from any agent; the Console starts Claude Code
@@ -226,6 +242,7 @@ Maestro is at 0.1: used daily by its author, new to everyone else. Known limits:
 - **In an `.agents/` project, Claude Code does not load `.agents/rules` or `.agents/skills` by itself.** Maestro shows and edits them;
   the instructions file has to tell the agent to read them (the starter's does).
 - **Hooks are shown, not edited.**
+- **Updates are not signed.** They are fetched over HTTPS from this repository's releases; Windows may warn about an unknown publisher.
 - **Ship and Checks** (a deploy ledger and recorded test passes) need a kit script and stay hidden without one:
   [docs/kit.md](docs/kit.md).
 
