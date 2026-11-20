@@ -61,6 +61,7 @@
     { path: 'src/tides/predict.test.ts', staged: 'M', work: '.', add: 31, del: 0 }, { path: 'src/app/settings/page.tsx', staged: '.', work: 'M', add: 6, del: 2 }, { path: '.claude/log/' + log[0].slug + '.md', staged: '.', work: '?' }];
   const commits = titles.slice(1, 9).map((t, i) => ({ sha: (i + 10).toString(16).repeat(20).slice(0, 40), short: (i + 10).toString(16).repeat(7).slice(0, 7), who: i % 3 ? 'Sam' : 'Ada', at: `${day(i + 1)} 1${i}:2${i}`, ago: `${i + 1} day${i ? 's' : ''} ago`, subject: `${i % 4 === 3 ? 'fix' : 'feat'}: ${t.toLowerCase()}`, refs: i === 0 ? 'HEAD -> main' : i === 2 ? 'origin/main' : '', unpushed: i < 2 }));
   const diff = '@@ -18,9 +18,12 @@ export function TideChart({ points, unit }: Props) {\n   const width = useWidth(ref);\n-  const step = Math.max(1, Math.floor(points.length / 600));\n-  const shown = points.filter((_, i) => i % step === 0);\n+  // at most 288 points: more made scrolling stutter on older phones\n+  const step = Math.max(1, Math.ceil(points.length / 288));\n+  const shown = points.filter((_, i) => i % step === 0 || i === points.length - 1);\n+  const path = useMemo(() => smooth(shown, width), [shown, width]);\n   return (\n     <svg ref={ref} viewBox={`0 0 ${width} 160`} role="img" aria-label={label}>\n-      <path d={line(shown, width)} className="curve" />\n+      <path d={path} className="curve" />\n       <Labels points={extremes(points)} unit={unit} />\n     </svg>\n';
+  const favs = new Set([0]);
   const terms = {};
   const say = (id, text) => emit('term', { id, data: text });
   const script = {
@@ -78,8 +79,8 @@
   };
   const api = {
     load: () => state.data,
-    projects: () => ({ names: state.names, roots: state.roots, favs: state.names.map((_, i) => i === 0), native: state.names.map((n) => n === 'field-notes'), current: 0 }),
-    set_project: () => null, set_favorite: () => null, remove_project: () => null, pick_folder: () => 'D:\\projects\\new-idea',
+    projects: () => ({ names: state.names, roots: state.roots, favs: state.names.map((_, i) => favs.has(i)), native: state.names.map((n) => n === 'field-notes'), current: 0 }),
+    set_project: () => null, set_favorite: ({ i, on }) => { if (on) favs.add(i); else favs.delete(i); return null; }, remove_project: () => null, pick_folder: () => 'D:\\projects\\new-idea',
     machine: () => ({ distros: ['Ubuntu'], windowsClaude: true, windowsClaudeExe: true }),
     inspect_project: ({ folder, runs }) => ({ entry: { name: 'new-idea', root: 'D:\\projects\\new-idea', runs: runs || 'wsl', wslRoot: '/mnt/d/projects/new-idea', distro: 'Ubuntu', claudeHome: '\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude', memoryDir: '\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude\\projects\\-mnt-d-projects-new-idea\\memory', kit: '' }, choices: { wsl: true, windows: true, distro: 'Ubuntu' }, found: { dir: '.claude', claude: false, kit: false, instructions: false, instructionsName: 'CLAUDE.md', rules: 0, log: 0, skills: 0, memory: false, memories: 0, worked: false }, already: false, typed: folder }),
     add_project: () => { state = { data: bare, names: ['new-idea'], roots: ['D:\\projects\\new-idea'] }; return 0; },
