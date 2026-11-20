@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'ci/**']
   pull_request:
 
 permissions:
@@ -10,10 +10,30 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest, artifact: maestro-windows-x64 }
+          - { name: Linux, os: ubuntu-22.04, artifact: maestro-linux-x64 }
+          - { name: macOS (Apple silicon), os: macos-latest, artifact: maestro-macos-arm64 }
+          # built on the same runner for the other processor; it cannot be run there, so its tests are the Apple silicon job's
+          - { name: macOS (Intel), os: macos-latest, artifact: maestro-macos-x64, target: x86_64-apple-darwin }
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev tmux
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -21,21 +41,33 @@ jobs:
         with:
           node-version: 22
       - name: The page's script parses
-        shell: bash
         run: node tools/check-page.mjs
       - name: Leak check
-        shell: bash
         run: node tools/leak-check.mjs --all
+      - name: The session script runs
+        if: runner.os != 'Windows'
+        run: |
+          bash -n wsl/term.sh
+          bash wsl/term.sh --check
+          bash wsl/term.sh --list
       - name: Tests
+        if: matrix.target == ''
         working-directory: src-tauri
-        run: cargo test
+        run: |
+          set -o pipefail
+          cargo test 2>&1 | tee ../test.log || { node ../tools/ci-annotate.mjs ../test.log; exit 1; }
       - name: Release build
         working-directory: src-tauri
-        run: cargo build --release
+        run: |
+          set -o pipefail
+          cargo build --release ${{ matrix.target && format('--target {0}', matrix.target) || '' }} 2>&1 | tee ../build.log || { node ../tools/ci-annotate.mjs ../build.log; exit 1; }
+          node ../tools/ci-annotate.mjs ../build.log
       - uses: actions/upload-artifact@v4
         with:
-          name: maestro-windows-x64
+          name: ${{ matrix.artifact }}
           path: |
             src-tauri/target/release/maestro.exe
+            src-tauri/target/release/maestro
             src-tauri/target/release/WebView2Loader.dll
-          if-no-files-found: warn
+            src-tauri/target/${{ matrix.target || 'none' }}/release/maestro
+          if-no-files-found: error

@@ -2,6 +2,7 @@
 // Nothing here is read from disk. `window.__PREVIEW.emit(event, payload)` lets a test play a session's output.
 (() => {
   const scene = new URLSearchParams(location.search).get('scene') || 'full';
+  const os = new URLSearchParams(location.search).get('os'); if (os) window.__OS = os; // ?os=linux or ?os=macos shows the page as it is there
   document.documentElement.style.background = '#0b0e13'; // the app's window is see-through; a browser tab needs a backdrop
   const day = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const now = Math.floor(Date.now() / 1000);
@@ -81,7 +82,7 @@
     load: () => state.data,
     projects: () => ({ names: state.names, roots: state.roots, favs: state.names.map((_, i) => favs.has(i)), native: state.names.map((n) => n === 'field-notes'), current: 0 }),
     set_project: () => null, set_favorite: ({ i, on }) => { if (on) favs.add(i); else favs.delete(i); return null; }, remove_project: () => null, pick_folder: () => 'D:\\projects\\new-idea',
-    machine: () => ({ distros: ['Ubuntu'], windowsClaude: true, windowsClaudeExe: true }),
+    machine: () => ({ platform: window.__OS || 'windows', distros: window.__OS && window.__OS !== 'windows' ? [] : ['Ubuntu'], claudeFolder: true, claudeProgram: true }),
     inspect_project: ({ folder, runs }) => ({ entry: { name: 'new-idea', root: 'D:\\projects\\new-idea', runs: runs || 'wsl', wslRoot: '/mnt/d/projects/new-idea', distro: 'Ubuntu', claudeHome: '\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude', memoryDir: '\\\\wsl.localhost\\Ubuntu\\home\\me\\.claude\\projects\\-mnt-d-projects-new-idea\\memory', kit: '' }, choices: { wsl: true, windows: true, distro: 'Ubuntu' }, found: { dir: '.claude', claude: false, kit: false, instructions: false, instructionsName: 'CLAUDE.md', rules: 0, log: 0, skills: 0, memory: false, memories: 0, worked: false }, already: false, typed: folder }),
     add_project: () => { state = { data: bare, names: ['new-idea'], roots: ['D:\\projects\\new-idea'] }; return 0; },
     starter_plan: ({ layout }) => starter(layout || 'claude'),
@@ -97,7 +98,7 @@
     git_diff: () => ({ text: diff, cut: false }),
     git_tree: ({ dirPath }) => dirPath ? [{ path: `${dirPath}/index.ts`, name: 'index.ts', dir: false }] : ['.claude', 'docs', 'src'].map((n) => ({ path: n, name: n, dir: true })).concat(['CLAUDE.md', 'README.md', 'package.json'].map((n) => ({ path: n, name: n, dir: false }))),
     git_file: () => ({ text: '# tidepool\n\nTide times for small harbours.\n', cut: false }),
-    term_check: () => ({ native: false, distro: 'Ubuntu', tmux: true, claude: true }),
+    term_check: () => ({ native: false, place: window.__OS && window.__OS !== 'windows' ? 'on this machine' : 'in Ubuntu', install: 'sudo apt install tmux', tmux: true, claude: true }),
     term_list: () => Object.values(terms).filter((t) => t.kind !== 'powershell').map((t) => ({ name: t.name, created: now - 600, kind: t.kind, label: t.label, path: '/mnt/d/projects/tidepool', attached: true })),
     term_open: (o) => { const name = o.kind === 'powershell' ? '' : `maestro-tidepool-${o.kind}-${Date.now()}`; terms[o.id] = { name, kind: o.kind, label: o.label }; setTimeout(() => script[o.kind] && script[o.kind](o.id, o), 60); return name; },
     clip_get: () => window.__PREVIEW.clipboard || '',

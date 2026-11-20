@@ -3,6 +3,16 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 [Semantic Versioning](https://semver.org).
 
+## [0.4.0] - 2026-11-20
+
+### Added
+- macOS and Linux. A project there is simply its folder; sessions live in a tmux server on the machine and outlive the app;
+  the shell button opens your own shell. Clipboard, start at sign-in, the update system and the app's own files each use what
+  the system provides. Releases carry a build for Windows, Linux, and Apple-silicon and Intel Macs.
+
+### Fixed
+- A desktop without a tray no longer stops the app from starting.
+
 ## [0.3.0] - 2026-11-19
 
 ### Added

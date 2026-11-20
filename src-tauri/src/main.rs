@@ -15,10 +15,21 @@ fn rd(p: &Path) -> String {
     fs::read_to_string(p).unwrap_or_default()
 }
 
-/// Where a new maestro.config.json goes when there is none yet: beside the program, or in %APPDATA%\Maestro when that folder
-/// cannot be written (an install under Program Files).
+/// Which system this build is for: the page words a few things by it, and a release is fetched for it.
+const PLATFORM: &str = if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "macos" } else { "linux" };
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(PathBuf::from)
+}
+/// Where the app keeps its own two files (maestro.config.json, maestro.log) when they are not beside the program:
+/// %APPDATA%\Maestro on Windows, ~/Library/Application Support/Maestro on macOS, ~/.config/maestro on Linux.
 fn app_data() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Maestro"))
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Maestro"))
+    } else if cfg!(target_os = "macos") {
+        home_dir().map(|h| h.join("Library").join("Application Support").join("Maestro"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).or_else(|| home_dir().map(|h| h.join(".config"))).map(|d| d.join("maestro"))
+    }
 }
 /// maestro.config.json beside the program, in a folder above it (target/release → the project folder), or in %APPDATA%\Maestro.
 fn config_path() -> Option<PathBuf> {
@@ -50,12 +61,13 @@ fn save_config(c: &Value) -> Result<(), String> {
         let _ = fs::copy(&f, f.with_extension("json.bak"));
         return fs::write(&f, text).map_err(|e| e.to_string());
     }
-    // the first project on this machine: the file does not exist yet
+    // the first project on this machine: the file does not exist yet. On Windows it goes beside the program when that folder
+    // can be written; elsewhere (and on macOS and Linux always) into the app's own folder.
     let beside = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("maestro.config.json")));
-    if let Some(f) = &beside {
+    if let (true, Some(f)) = (cfg!(windows), &beside) {
         if fs::write(f, &text).is_ok() { return Ok(()); }
     }
-    let dir = app_data().ok_or("there is nowhere to keep maestro.config.json: the app's folder cannot be written and %APPDATA% is not set")?;
+    let dir = app_data().ok_or("there is nowhere to keep maestro.config.json: the home folder of this user is not known")?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     fs::write(dir.join("maestro.config.json"), text).map_err(|e| e.to_string())
 }
@@ -75,6 +87,42 @@ struct Project {
     dot: PathBuf,
     /// The instructions file: CLAUDE.md, or AGENTS.md where that is the one the project has.
     instructions: PathBuf,
+}
+/// Where a project's agent runs, which decides how a session is started and whether it outlives the app.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Host {
+    /// Windows, with the agent inside a WSL distro: sessions live in tmux there, reached through wsl.exe
+    Wsl,
+    /// Windows, with the agent on Windows itself: started directly, ends with the app
+    Direct,
+    /// macOS or Linux: sessions live in tmux on this machine
+    Local,
+}
+impl Project {
+    fn host(&self) -> Host {
+        if !cfg!(windows) { Host::Local } else if self.native { Host::Direct } else { Host::Wsl }
+    }
+    /// `bash` where this project's agent lives, as a program and its first arguments; with `cd`, in the project's folder
+    /// (the second value is the folder to start in, for a host that takes it that way).
+    fn bash(&self, cd: bool) -> (String, Vec<String>, Option<PathBuf>) {
+        match self.host() {
+            Host::Wsl => {
+                let mut a = vec!["-d".to_string(), self.distro.clone()];
+                if cd { a.extend(["--cd".to_string(), self.wsl_root.clone()]); }
+                a.extend(["--exec".to_string(), "bash".to_string()]);
+                ("wsl.exe".into(), a, None)
+            }
+            _ => ("bash".into(), vec![], if cd { Some(self.root.clone()) } else { None }),
+        }
+    }
+    /// The same as a command that waits for its output (no window flashes up on Windows).
+    fn bash_command(&self, cd: bool, args: &[&str]) -> std::process::Command {
+        let (program, first, dir) = self.bash(cd);
+        let mut c = std::process::Command::new(program);
+        c.args(first).args(args);
+        if let Some(d) = dir { c.current_dir(d); }
+        quiet(c)
+    }
 }
 /// Which folder holds a project's harness. `.claude` unless the project keeps its rules, skills or log in `.agents` and has none
 /// of them in `.claude` (a `.claude` that only holds settings does not count).
@@ -109,27 +157,24 @@ fn project_at(i: usize) -> Result<Project, String> {
     let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
     let root = PathBuf::from(s("root"));
     let dot = dot_of(&root);
-    Ok(Project { name: s("name"), native: s("runs") == "windows" || s("wslRoot").is_empty(), instructions: instructions_of(&root, &dot), dot, root, claude_home: PathBuf::from(s("claudeHome")), memory: PathBuf::from(s("memoryDir")), wsl_root: s("wslRoot"), kit: s("kit"), audits: p["audits"].as_array().cloned().unwrap_or_default().iter().filter_map(|a| a.as_str().map(PathBuf::from)).collect(), distro: if s("distro").is_empty() { "Ubuntu".into() } else { s("distro") } })
+    // "native" is a Windows matter (no WSL in between); on macOS and Linux every project is simply on this machine
+    Ok(Project { name: s("name"), native: cfg!(windows) && (s("runs") == "windows" || s("runs") == "native" || s("wslRoot").is_empty()), instructions: instructions_of(&root, &dot), dot, root, claude_home: PathBuf::from(s("claudeHome")), memory: PathBuf::from(s("memoryDir")), wsl_root: s("wslRoot"), kit: s("kit"), audits: p["audits"].as_array().cloned().unwrap_or_default().iter().filter_map(|a| a.as_str().map(PathBuf::from)).collect(), distro: if s("distro").is_empty() { "Ubuntu".into() } else { s("distro") } })
 }
 
-/// Run one kit command inside WSL, in the project's folder, and return what it printed. The kit (`ctx`) stays the one place
-/// that knows how a ledger row closes; this app never re-implements it. `--exec` starts the kit's launcher with the arguments
-/// as given: through a shell, wsl.exe re-splits the line and a quoted script arrives in pieces.
+/// Run one kit command where the project's agent lives, in the project's folder, and return what it printed. The kit stays the
+/// one place that knows how a ledger row closes; this app never re-implements it. Inside WSL `--exec` starts it with the
+/// arguments as given: through a shell, wsl.exe re-splits the line and a quoted script arrives in pieces.
 fn wsl(p: &Project, args: &[&str]) -> Result<String, String> {
-    if p.wsl_root.is_empty() || p.kit.is_empty() { return Err("this needs a kit: a script named as \"kit\" for this project in maestro.config.json (see docs/kit.md)".into()); }
-    let mut c = std::process::Command::new("wsl.exe");
-    c.args(["-d", &p.distro, "--cd", &p.wsl_root, "--exec", "bash", &p.kit]);
-    c.args(args);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // no console window
-    }
-    let out = c.output().map_err(|e| format!("could not start WSL: {e}"))?;
+    if p.kit.is_empty() || p.host() == Host::Direct || (p.host() == Host::Wsl && p.wsl_root.is_empty()) { return Err("this needs a kit: a script named as \"kit\" for this project in maestro.config.json (see docs/kit.md)".into()); }
+    let mut all: Vec<&str> = vec![&p.kit];
+    all.extend_from_slice(args);
+    let out = p.bash_command(true, &all).output().map_err(|e| format!("the kit could not be started: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     if text.trim().is_empty() && !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).trim().to_string()); }
     Ok(text)
 }
+/// A command that opens no console window of its own (Windows).
+#[allow(unused_mut)]
 fn quiet(mut c: std::process::Command) -> std::process::Command {
     #[cfg(windows)]
     {
@@ -848,9 +893,9 @@ fn linux_of(unc: &str) -> Option<String> {
     if rest.len() < 3 { return None; }
     Some(format!("/{}", rest[2..].join("/")))
 }
-/// Claude Code's own folder when it runs on Windows itself: %USERPROFILE%\.claude
+/// Claude Code's own folder when it runs on this system itself (not inside WSL): ~/.claude
 fn windows_claude_home() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".claude"))
+    home_dir().map(|h| h.join(".claude"))
 }
 /// Claude names a project's folder after its path with every sign that is not a letter or a digit turned into a dash.
 fn dashed(path: &str) -> String {
@@ -894,6 +939,7 @@ fn read_folder(folder: &str, distro: &str) -> Result<Folder, String> {
 /// and where Claude keeps that project's memory. `runs` ("wsl" or "windows") is the user's own answer; without it the app looks
 /// at which side has already worked in the folder, then at what the other projects of the list do, then at what is installed.
 fn derive(folder: &str, runs: Option<&str>) -> Result<Value, String> {
+    if !cfg!(windows) { return derive_local(folder); }
     let c = config();
     let list = c["projects"].as_array().cloned().unwrap_or_default();
     let is_native = |p: &Value| p["runs"] == "windows" || p["wslRoot"].as_str().unwrap_or("").is_empty();
@@ -946,26 +992,47 @@ fn derive(folder: &str, runs: Option<&str>) -> Result<Value, String> {
         let kit = same.and_then(|p| p["kit"].as_str()).unwrap_or("").to_string();
         entry = json!({ "name": name, "root": f.root, "runs": "wsl", "wslRoot": f.wsl_root, "distro": distro, "claudeHome": claude_home.to_string_lossy(), "memoryDir": memory.to_string_lossy(), "kit": kit });
     }
-    let dot = dot_of(&root_path);
-    let instructions = instructions_of(&root_path, &dot);
-    let count = |d: &Path| md_files(d).len();
+    Ok(json!({ "entry": entry, "choices": { "wsl": can_wsl, "windows": can_win, "distro": distro }, "found": found_in(&root_path, &memory, if native { win_has } else { wsl_has }) }))
+}
+/// What is in a project's folder: where its harness is and how much of one there is.
+fn found_in(root: &Path, memory: &Path, worked: bool) -> Value {
+    let dot = dot_of(root);
+    let instructions = instructions_of(root, &dot);
+    json!({
+        "dir": rel(&dot), "claude": dot.is_dir(), "kit": dot.join("ctx.json").exists(),
+        "instructions": instructions.exists(), "instructionsName": name_of(&instructions),
+        "rules": md_files(&dot.join("rules")).len(), "log": md_files(&dot.join("log")).iter().filter(|f| date_in(&name_of(f)).is_some()).count(),
+        "skills": fs::read_dir(dot.join("skills")).map(|r| r.filter_map(|e| e.ok()).filter(|e| e.path().join("SKILL.md").exists()).count()).unwrap_or(0),
+        "memory": memory.is_dir(), "memories": md_files(memory).iter().filter(|f| name_of(f) != "MEMORY.md").count(),
+        "worked": worked,
+    })
+}
+/// The same on macOS and Linux, where there is one answer: the folder is on this machine and so is the agent.
+fn derive_local(folder: &str) -> Result<Value, String> {
+    let t = folder.trim().trim_matches('"').to_string();
+    if t.is_empty() { return Err("type or pick the project's folder".into()); }
+    let home = home_dir().ok_or("the home folder of this user is not known")?;
+    let path = if t == "~" { home.clone() } else if let Some(rest) = t.strip_prefix("~/") { home.join(rest) } else { PathBuf::from(&t) };
+    if !path.is_absolute() { return Err("give the whole path, for example ~/projects/my-site".into()); }
+    if !path.is_dir() { return Err(format!("there is no folder at {}", path.display())); }
+    let root = path.canonicalize().unwrap_or(path).to_string_lossy().trim_end_matches('/').to_string();
+    let root_path = PathBuf::from(&root);
+    let claude_home = home.join(".claude");
+    let projects = claude_home.join("projects");
+    let (strict, plain) = (dashed(&root), root.replace('/', "-"));
+    let slug_dir = [strict.clone(), plain].into_iter().find(|n| projects.join(n).is_dir()).unwrap_or(strict);
+    let memory = projects.join(&slug_dir).join("memory");
+    let name = root_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     Ok(json!({
-        "entry": entry,
-        "choices": { "wsl": can_wsl, "windows": can_win, "distro": distro },
-        "found": {
-            "dir": rel(&dot), "claude": dot.is_dir(), "kit": dot.join("ctx.json").exists(),
-            "instructions": instructions.exists(), "instructionsName": name_of(&instructions),
-            "rules": count(&dot.join("rules")), "log": md_files(&dot.join("log")).iter().filter(|f| date_in(&name_of(f)).is_some()).count(),
-            "skills": fs::read_dir(dot.join("skills")).map(|r| r.filter_map(|e| e.ok()).filter(|e| e.path().join("SKILL.md").exists()).count()).unwrap_or(0),
-            "memory": memory.is_dir(), "memories": md_files(&memory).iter().filter(|f| name_of(f) != "MEMORY.md").count(),
-            "worked": if native { win_has } else { wsl_has },
-        }
+        "entry": { "name": name, "root": root, "runs": "native", "wslRoot": "", "distro": "", "claudeHome": claude_home.to_string_lossy(), "memoryDir": memory.to_string_lossy(), "kit": "" },
+        "choices": { "wsl": false, "windows": false, "distro": "" },
+        "found": found_in(&root_path, &memory, projects.join(&slug_dir).is_dir()),
     }))
 }
-/// What this machine has, for the welcome screen: WSL distros, and whether Claude Code has a folder on the Windows side.
+/// What this machine has, for the welcome screen: which system it is, the WSL distros (Windows), and whether Claude Code is here.
 #[tauri::command(async)]
 fn machine() -> Value {
-    json!({ "distros": wsl_distros(), "windowsClaude": windows_claude_home().map(|h| h.is_dir()).unwrap_or(false), "windowsClaudeExe": find_claude().is_some() })
+    json!({ "platform": PLATFORM, "distros": if cfg!(windows) { wsl_distros() } else { vec![] }, "claudeFolder": windows_claude_home().map(|h| h.is_dir()).unwrap_or(false), "claudeProgram": find_claude().is_some() })
 }
 /// What adding this folder would give: the entry, and what is in the folder.
 #[tauri::command(async)]
@@ -1083,11 +1150,10 @@ fn pick_folder(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Option<St
     app.dialog().file().set_parent(&window).set_title("Pick the project's folder").blocking_pick_folder().map(|p| p.to_string())
 }
 
-// ---- git: read only. The app shows what changed and what was committed; it never stages, commits or pushes. ----
-/// A path the kit wrote the WSL way (/mnt/d/x) as Windows wants it (D:\\x).
+/// A path the kit wrote the WSL way (/mnt/d/x) as Windows wants it (D:\\x). On macOS and Linux a path is already right.
 fn win_path(pth: &str) -> PathBuf {
     let b = pth.as_bytes();
-    if pth.starts_with("/mnt/") && b.len() > 6 && b[6] == b'/' {
+    if cfg!(windows) && pth.starts_with("/mnt/") && b.len() > 6 && b[6] == b'/' {
         return PathBuf::from(format!("{}:\\{}", pth[5..6].to_uppercase(), pth[7..].replace('/', "\\")));
     }
     PathBuf::from(pth)
@@ -1115,7 +1181,7 @@ fn repo_dir(p: &Project, repo: &str) -> Result<PathBuf, String> {
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let mut c = std::process::Command::new("git");
     c.arg("-C").arg(dir).args(["-c", "core.quotepath=false", "-c", "color.ui=false"]).args(args);
-    let out = quiet(c).output().map_err(|e| format!("git could not be started ({e}): is Git for Windows installed?"))?;
+    let out = quiet(c).output().map_err(|e| format!("git could not be started ({e}): is git installed{}?", if cfg!(windows) { " (Git for Windows)" } else { "" }))?;
     if !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).trim().to_string()); }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
@@ -1242,7 +1308,7 @@ fn projects(cur: State<Cur>, window: tauri::WebviewWindow) -> Value {
     let names: Vec<Value> = list.iter().map(|p| p["name"].clone()).collect();
     let roots: Vec<Value> = list.iter().map(|p| p["root"].clone()).collect();
     let favs: Vec<bool> = list.iter().map(|p| p["favorite"].as_bool().unwrap_or(false)).collect();
-    let native: Vec<bool> = list.iter().map(|p| p["runs"] == "windows" || p["wslRoot"].as_str().unwrap_or("").is_empty()).collect();
+    let native: Vec<bool> = list.iter().map(|p| cfg!(windows) && (p["runs"] == "windows" || p["runs"] == "native" || p["wslRoot"].as_str().unwrap_or("").is_empty())).collect();
     json!({ "names": names, "roots": roots, "favs": favs, "native": native, "current": cur_of(&cur, &window) })
 }
 #[tauri::command]
@@ -1256,17 +1322,19 @@ fn set_project(i: usize, cur: State<Cur>, window: tauri::WebviewWindow) -> Resul
 // ---- updates: asked for by the user (or at start, if they turned that on). Nothing else in this program uses the network. ----
 /// The repository whose published releases this build updates from. A fork that publishes its own releases changes this line.
 const REPO: &str = "Nils-Kelley/maestro";
-const ASSET: &str = "maestro-windows-x64.zip";
-/// Windows' own curl.exe and tar.exe, by their full path so that nothing else on PATH can stand in for them.
+/// The build a release carries for this system, and the program's name inside it.
+const ASSET: &str = if cfg!(windows) { "maestro-windows-x64.zip" } else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "maestro-macos-arm64.tar.gz" } else { "maestro-macos-x64.tar.gz" } } else { "maestro-linux-x64.tar.gz" };
+const EXE: &str = if cfg!(windows) { "maestro.exe" } else { "maestro" };
+/// curl and tar as the system ships them. On Windows by their full path, so that nothing else on PATH can stand in for them.
 fn system_tool(name: &str) -> PathBuf {
-    PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into())).join("System32").join(name)
+    if cfg!(windows) { PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into())).join("System32").join(format!("{name}.exe")) } else { PathBuf::from(name) }
 }
 fn fetch(url: &str, to: Option<&Path>) -> Result<Vec<u8>, String> {
-    let mut c = std::process::Command::new(system_tool("curl.exe"));
+    let mut c = std::process::Command::new(system_tool("curl"));
     c.args(["--silent", "--show-error", "--fail", "--location", "--max-time", "120", "--proto", "=https", "--user-agent", "maestro-update-check", "--header", "Accept: application/vnd.github+json"]);
     if let Some(f) = to { c.arg("--output").arg(f); }
     c.arg(url);
-    let out = quiet(c).output().map_err(|e| format!("curl.exe could not be started ({e}): it is part of Windows 10 and 11"))?;
+    let out = quiet(c).output().map_err(|e| format!("curl could not be started ({e})"))?;
     if !out.status.success() {
         let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if why.contains("404") { "no release has been published yet".into() } else { format!("could not reach GitHub: {why}") });
@@ -1299,7 +1367,7 @@ fn update_check() -> Result<Value, String> {
 /// What this build is, without asking anyone.
 #[tauri::command]
 fn update_state() -> Value {
-    json!({ "current": env!("CARGO_PKG_VERSION"), "auto": config()["checkUpdates"].as_bool().unwrap_or(false), "repo": REPO })
+    json!({ "platform": PLATFORM, "current": env!("CARGO_PKG_VERSION"), "auto": config()["checkUpdates"].as_bool().unwrap_or(false), "repo": REPO })
 }
 /// Check at start, or only when asked (the default).
 #[tauri::command]
@@ -1313,26 +1381,30 @@ fn update_auto_set(on: bool) -> Result<bool, String> {
 #[tauri::command]
 fn update_page(tag: String) -> Result<(), String> {
     if tag.is_empty() || !tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') { return Err("not a release".into()); }
-    let mut c = std::process::Command::new(system_tool("..\\explorer.exe"));
+    let mut c = std::process::Command::new(if cfg!(windows) { "explorer.exe" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
     c.arg(format!("https://github.com/{REPO}/releases/tag/{tag}"));
     quiet(c).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 /// Put a downloaded build in the place of this one. The running program cannot be overwritten but it can be renamed: it is moved
 /// aside as maestro.exe.old (removed at the next start), the new one takes its name, and a failure puts the old one back.
 fn swap_in(dir: &Path, exe: &Path) -> Result<(), String> {
-    let new_exe = dir.join("maestro.exe");
-    let size = fs::metadata(&new_exe).map(|m| m.len()).map_err(|_| "the download holds no maestro.exe")?;
-    if size < 1_000_000 { return Err("the downloaded maestro.exe is too small to be the program".into()); }
+    let size = fs::metadata(dir.join(EXE)).map(|m| m.len()).map_err(|_| format!("the download holds no {EXE}"))?;
+    if size < 1_000_000 { return Err(format!("the downloaded {EXE} is too small to be the program")); }
     let here = exe.parent().ok_or("this program has no folder")?;
     let mut done: Vec<(PathBuf, PathBuf)> = vec![]; // (file, where the old one went)
     let put = |name: &str, target: &Path, done: &mut Vec<(PathBuf, PathBuf)>| -> Result<(), String> {
-        let old = target.with_extension(format!("{}.old", target.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default()));
+        let old = target.with_file_name(format!("{}.old", name_of(target)));
         let _ = fs::remove_file(&old);
         if target.exists() { fs::rename(target, &old).map_err(|e| format!("{} could not be moved aside: {e}", name_of(target)))?; }
         done.push((target.to_path_buf(), old));
         fs::copy(dir.join(name), target).map(|_| ()).map_err(|e| format!("{name} could not be written: {e}"))
     };
-    let mut result = put("maestro.exe", exe, &mut done);
+    let mut result = put(EXE, exe, &mut done);
+    #[cfg(unix)]
+    if result.is_ok() {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(exe, fs::Permissions::from_mode(0o755));
+    }
     if result.is_ok() && dir.join("WebView2Loader.dll").exists() { result = put("WebView2Loader.dll", &here.join("WebView2Loader.dll"), &mut done); }
     if let Err(e) = result {
         for (target, old) in done.iter().rev() { let _ = fs::remove_file(target); let _ = fs::rename(old, target); }
@@ -1353,15 +1425,22 @@ fn update_install(app: tauri::AppHandle) -> Result<String, String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let zip = dir.join(ASSET);
     fetch(url, Some(&zip))?;
-    let mut c = std::process::Command::new(system_tool("tar.exe"));
+    let mut c = std::process::Command::new(system_tool("tar"));
     c.arg("-xf").arg(&zip).arg("-C").arg(&dir);
-    let out = quiet(c).output().map_err(|e| format!("tar.exe could not be started ({e})"))?;
+    let out = quiet(c).output().map_err(|e| format!("tar could not be started ({e})"))?;
     if !out.status.success() { return Err(format!("the download could not be unpacked: {}", String::from_utf8_lossy(&out.stderr).trim())); }
     swap_in(&dir, &exe)?;
     let _ = fs::remove_dir_all(&dir);
     // start the new one once this one has gone (a second copy started now would only wake this one and leave)
-    let mut c = std::process::Command::new("powershell.exe");
-    c.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", "Start-Sleep -Milliseconds 1500; Start-Process -FilePath $env:MAESTRO_EXE"]).env("MAESTRO_EXE", &exe);
+    let mut c;
+    if cfg!(windows) {
+        c = std::process::Command::new("powershell.exe");
+        c.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", "Start-Sleep -Milliseconds 1500; Start-Process -FilePath $env:MAESTRO_EXE"]);
+    } else {
+        c = std::process::Command::new("sh");
+        c.args(["-c", "sleep 1.5; exec \"$MAESTRO_EXE\" >/dev/null 2>&1 &"]);
+    }
+    c.env("MAESTRO_EXE", &exe);
     quiet(c).spawn().map_err(|e| format!("the update is in place, but Maestro could not be restarted ({e}): start it yourself"))?;
     let tag = r["latest"].as_str().unwrap_or("").to_string();
     std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(400)); app.exit(0); });
@@ -1369,18 +1448,36 @@ fn update_install(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 const RUN_KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-/// Does Windows start Maestro at sign-in?
+/// Where "start at sign-in" is written on macOS (a launch agent) and Linux (an autostart entry). Windows keeps it in the registry.
+fn autostart_file() -> Option<PathBuf> {
+    let home = home_dir()?;
+    if cfg!(target_os = "macos") { Some(home.join("Library").join("LaunchAgents").join("app.maestro.deck.plist")) } else if cfg!(windows) { None } else { Some(std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".config")).join("autostart").join("maestro.desktop")) }
+}
+/// Does the system start Maestro at sign-in?
 #[tauri::command]
 fn autostart_get() -> bool {
+    if let Some(f) = autostart_file() { return f.exists(); }
     let mut c = std::process::Command::new("reg.exe");
     c.args(["query", RUN_KEY, "/v", "Maestro"]);
     quiet(c).output().map(|o| o.status.success()).unwrap_or(false)
 }
 #[tauri::command]
 fn autostart_set(on: bool) -> Result<bool, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    if let Some(f) = autostart_file() {
+        if !on { let _ = fs::remove_file(&f); return Ok(autostart_get()); }
+        let xml = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        let text = if cfg!(target_os = "macos") {
+            format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>app.maestro.deck</string>\n<key>ProgramArguments</key><array><string>{}</string><string>--hidden</string></array>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n", xml(&exe.to_string_lossy()))
+        } else {
+            format!("[Desktop Entry]\nType=Application\nName=Maestro\nComment=Your agents and their harness, in one place\nExec=\"{}\" --hidden\nTerminal=false\nX-GNOME-Autostart-enabled=true\n", exe.to_string_lossy().replace('"', "\\\""))
+        };
+        if let Some(d) = f.parent() { fs::create_dir_all(d).map_err(|e| e.to_string())?; }
+        fs::write(&f, text).map_err(|e| e.to_string())?;
+        return Ok(autostart_get());
+    }
     let mut c = std::process::Command::new("reg.exe");
     if on {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         c.args(["add", RUN_KEY, "/v", "Maestro", "/t", "REG_SZ", "/d", &format!("\"{}\" --hidden", exe.display()), "/f"]);
     } else {
         c.args(["delete", RUN_KEY, "/v", "Maestro", "/f"]);
@@ -1402,36 +1499,45 @@ struct Terms(Mutex<std::collections::HashMap<String, Term>>);
 /// The scripts that keep sessions alive inside WSL, built into the program.
 const TERM_SH: &str = include_str!("../../wsl/term.sh");
 const TMUX_CONF: &str = include_str!("../../wsl/tmux.conf");
-/// Put those scripts where the distro can run them (~/.local/share/maestro, written through the \\wsl.localhost share whenever
-/// they differ from this build's) and return term.sh's path as WSL sees it.
+/// Put the session scripts where bash can run them (~/.local/share/maestro; inside WSL that is written through the
+/// \\wsl.localhost share) whenever they differ from this build's, and return term.sh's path as that bash sees it.
 fn launcher(p: &Project) -> Result<String, String> {
-    let home = p.claude_home.parent().ok_or("this project's claudeHome is not a folder")?;
-    let linux = linux_of(&home.to_string_lossy()).ok_or("this project's claudeHome is not a folder inside WSL (\\\\wsl.localhost\\<distro>\\home\\<you>\\.claude)")?;
-    let dir = home.join(".local").join("share").join("maestro");
+    let (dir, seen) = if p.host() == Host::Local {
+        let d = home_dir().ok_or("the home folder of this user is not known")?.join(".local").join("share").join("maestro");
+        let seen = d.join("term.sh").to_string_lossy().to_string();
+        (d, seen)
+    } else {
+        let home = p.claude_home.parent().ok_or("this project's claudeHome is not a folder")?;
+        let linux = linux_of(&home.to_string_lossy()).ok_or("this project's claudeHome is not a folder inside WSL (\\\\wsl.localhost\\<distro>\\home\\<you>\\.claude)")?;
+        (home.join(".local").join("share").join("maestro"), format!("{linux}/.local/share/maestro/term.sh"))
+    };
     for (name, text) in [("term.sh", TERM_SH), ("tmux.conf", TMUX_CONF)] {
         let want = text.replace("\r\n", "\n");
         if rd(&dir.join(name)) != want {
-            fs::create_dir_all(&dir).and_then(|_| fs::write(dir.join(name), want)).map_err(|e| format!("could not write {name} into WSL: {e}"))?;
+            fs::create_dir_all(&dir).and_then(|_| fs::write(dir.join(name), want)).map_err(|e| format!("could not write {name} into {}: {e}", dir.display()))?;
         }
     }
-    Ok(format!("{linux}/.local/share/maestro/term.sh"))
+    Ok(seen)
 }
-/// The project whose distro holds the sessions: this one, or the first of the list that runs inside WSL.
+/// The project through which the sessions that outlive the app are reached: this one, or (for a project that runs on Windows
+/// itself) the first of the list that runs inside WSL.
 fn wsl_side(p: Project) -> Option<Project> {
-    if !p.native { return Some(p); }
+    if p.host() != Host::Direct { return Some(p); }
     let n = config()["projects"].as_array().map(|a| a.len()).unwrap_or(0);
-    (0..n).filter_map(|i| project_at(i).ok()).find(|q| !q.native)
+    (0..n).filter_map(|i| project_at(i).ok()).find(|q| q.host() == Host::Wsl)
 }
 /// A session this app started: maestro-…, or reins-… from a build before the rename.
 fn ours(n: &str) -> bool {
     (n.starts_with("maestro-") || n.starts_with("reins-")) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
-/// Claude Code on Windows itself: claude.exe (started directly) or claude.cmd (started through cmd.exe), from PATH or ~\.local\bin.
+/// Claude Code on this system itself: claude.exe or claude (started directly) or claude.cmd (started through cmd.exe), from PATH
+/// or ~/.local/bin.
 fn find_claude() -> Option<(PathBuf, bool)> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-    if let Some(h) = std::env::var_os("USERPROFILE") { dirs.push(PathBuf::from(h).join(".local").join("bin")); }
-    for (name, direct) in [("claude.exe", true), ("claude.cmd", false), ("claude.bat", false)] {
-        if let Some(f) = dirs.iter().map(|d| d.join(name)).find(|f| f.is_file()) { return Some((f, direct)); }
+    if let Some(h) = home_dir() { dirs.push(h.join(".local").join("bin")); }
+    let names: &[(&str, bool)] = if cfg!(windows) { &[("claude.exe", true), ("claude.cmd", false), ("claude.bat", false)] } else { &[("claude", true)] };
+    for (name, direct) in names {
+        if let Some(f) = dirs.iter().map(|d| d.join(name)).find(|f| f.is_file()) { return Some((f, *direct)); }
     }
     None
 }
@@ -1469,10 +1575,11 @@ fn term_open(id: String, kind: String, mode: String, proj: Option<usize>, name: 
         }
     }
     if kind == "powershell" {
+        if !cfg!(windows) { return Err("PowerShell sessions are for Windows: open a shell instead".into()); }
         cmd = CommandBuilder::new("powershell.exe");
         cmd.arg("-NoLogo");
         cmd.cwd(&p.root);
-    } else if kind == "claude" && p.native && mode != "attach" {
+    } else if kind == "claude" && p.host() == Host::Direct && mode != "attach" {
         let (exe, direct) = find_claude().ok_or("Claude Code was not found on Windows (looked for claude.exe and claude.cmd on PATH and in %USERPROFILE%\\.local\\bin)")?;
         if direct {
             cmd = CommandBuilder::new(exe);
@@ -1486,15 +1593,20 @@ fn term_open(id: String, kind: String, mode: String, proj: Option<usize>, name: 
         cmd.cwd(&p.root);
     } else if kind == "claude" || kind == "ubuntu" {
         // a session that is still running is reached through any project of that distro; a new one belongs to this project's folder
-        let p = if mode == "attach" { wsl_side(p) } else if p.native { None } else { Some(p) }.ok_or("this project runs on Windows itself, so there is no WSL shell for it: open PowerShell here")?;
-        if mode != "attach" && p.wsl_root.is_empty() { return Err("this project has no wslRoot in maestro.config.json, so a session cannot be opened in WSL".into()); }
+        let p = if mode == "attach" { wsl_side(p) } else if p.host() == Host::Direct { None } else { Some(p) }.ok_or("this project runs on Windows itself, so there is no WSL shell for it: open PowerShell here")?;
+        if mode != "attach" && p.host() == Host::Wsl && p.wsl_root.is_empty() { return Err("this project has no wslRoot in maestro.config.json, so a session cannot be opened in WSL".into()); }
         let launcher = launcher(&p)?;
-        cmd = CommandBuilder::new("wsl.exe");
-        // WSL turns the Windows PATH into Linux paths and complains, inside the session, about every entry on a drive that is not there:
-        // give it only the system folders (the launcher sets the Linux PATH itself)
-        let sys = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
-        cmd.env("PATH", format!("{sys}\\System32;{sys}"));
-        cmd.args(["-d", &p.distro, "--cd", &p.wsl_root, "--exec", "bash", &launcher]);
+        let (program, first, dir) = p.bash(mode != "attach");
+        cmd = CommandBuilder::new(program);
+        if p.host() == Host::Wsl {
+            // WSL turns the Windows PATH into Linux paths and complains, inside the session, about every entry on a drive that is not there:
+            // give it only the system folders (the launcher sets the Linux PATH itself)
+            let sys = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+            cmd.env("PATH", format!("{sys}\\System32;{sys}"));
+        }
+        cmd.args(first);
+        cmd.arg(&launcher);
+        if let Some(d) = dir { cmd.cwd(d); }
         if mode == "attach" {
             let n = name.unwrap_or_default();
             if !ours(&n) { return Err("not a session of this app".into()); }
@@ -1551,31 +1663,28 @@ fn term_open(id: String, kind: String, mode: String, proj: Option<usize>, name: 
     });
     Ok(made)
 }
-/// The claude and ubuntu sessions still running in WSL, whoever started them and whether or not a window shows them.
+/// The claude and shell sessions still running in tmux, whoever started them and whether or not a window shows them.
 #[tauri::command(async)]
 fn term_list(cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, String> {
     let Some(p) = project(&cur, &window).ok().and_then(wsl_side) else { return Ok(json!([])) };
     let Ok(launcher) = launcher(&p) else { return Ok(json!([])) };
-    let mut c = std::process::Command::new("wsl.exe");
-    c.args(["-d", &p.distro, "--exec", "bash", &launcher, "--list"]);
-    let out = quiet(c).output().map_err(|e| e.to_string())?;
+    let Ok(out) = p.bash_command(false, &[&launcher, "--list"]).output() else { return Ok(json!([])) };
     Ok(json!(String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| {
         let f: Vec<&str> = l.split('\t').collect();
         if f.len() < 6 || !ours(f[0]) { return None; }
         Some(json!({ "name": f[0], "created": f[1].parse::<i64>().unwrap_or(0), "kind": if f[2].is_empty() { "ubuntu" } else { f[2] }, "label": f[3], "path": f[4], "attached": f[5] != "0" }))
     }).collect::<Vec<_>>()))
 }
-/// Whether the distro has what a session needs: tmux (sessions outlive the app) and claude.
+/// Whether a session has what it needs where this project's agent runs: tmux (sessions outlive the app) and claude.
 #[tauri::command(async)]
 fn term_check(cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, String> {
     let p = project(&cur, &window)?;
-    if p.native { return Ok(json!({ "native": true, "claude": find_claude().is_some() })); }
+    if p.host() == Host::Direct { return Ok(json!({ "native": true, "claude": find_claude().is_some(), "place": "on Windows" })); }
     let launcher = launcher(&p)?;
-    let mut c = std::process::Command::new("wsl.exe");
-    c.args(["-d", &p.distro, "--exec", "bash", &launcher, "--check"]);
-    let out = quiet(c).output().map_err(|e| format!("could not start WSL: {e}"))?;
+    let out = p.bash_command(false, &[&launcher, "--check"]).output().map_err(|e| format!("bash could not be started: {e}"))?;
     let has: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.trim().to_string()).collect();
-    Ok(json!({ "native": false, "distro": p.distro, "tmux": has.iter().any(|h| h == "tmux"), "claude": has.iter().any(|h| h == "claude") }))
+    let place = if p.host() == Host::Wsl { format!("in {}", p.distro) } else { "on this machine".to_string() };
+    Ok(json!({ "native": false, "place": place, "tmux": has.iter().any(|h| h == "tmux"), "claude": has.iter().any(|h| h == "claude"), "install": if cfg!(target_os = "macos") { "brew install tmux" } else { "sudo apt install tmux" } }))
 }
 #[tauri::command]
 fn term_write(id: String, data: String, terms: State<Terms>) -> Result<(), String> {
@@ -1600,9 +1709,7 @@ fn term_close(id: String, name: Option<String>, end: bool, terms: State<Terms>, 
     }
     if let (true, Some(n)) = (end, name.filter(|n| ours(n))) {
         if let Some(p) = project(&cur, &window).ok().and_then(wsl_side) {
-            let mut c = std::process::Command::new("wsl.exe");
-            c.args(["-d", &p.distro, "--exec", "bash", &launcher(&p)?, "--kill", &n]);
-            let _ = quiet(c).output();
+            let _ = p.bash_command(false, &[&launcher(&p)?, "--kill", &n]).output();
         }
     }
     Ok(())
@@ -1614,9 +1721,7 @@ fn term_label(name: String, label: String, cur: State<Cur>, window: tauri::Webvi
     if !ours(&name) { return Ok(()); }
     let Some(p) = project(&cur, &window).ok().and_then(wsl_side) else { return Ok(()) };
     let shown: String = one_line(&label).chars().take(80).collect();
-    let mut c = std::process::Command::new("wsl.exe");
-    c.args(["-d", &p.distro, "--exec", "bash", &launcher(&p)?, "--label", &name, &shown]);
-    let _ = quiet(c).output();
+    let _ = p.bash_command(false, &[&launcher(&p)?, "--label", &name, &shown]).output();
     Ok(())
 }
 /// Give a running claude or ubuntu session a window of its own. The new window attaches to the same session, so nothing is moved
@@ -1676,31 +1781,56 @@ fn toggle_max(window: tauri::WebviewWindow) {
     if window.is_maximized().unwrap_or(false) { let _ = window.unmaximize(); } else { let _ = window.maximize(); }
 }
 
-/// Put text on the Windows clipboard (used when the page's own clipboard call is refused).
+/// The programs that write and read the clipboard on this system, in the order they are tried.
+fn clipboard_tools(read: bool) -> Vec<(&'static str, Vec<&'static str>)> {
+    if cfg!(windows) {
+        if read { vec![("powershell.exe", vec!["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $t = Get-Clipboard -Raw; if ($t) { [Console]::Out.Write($t) }"])] } else { vec![("clip.exe", vec![])] }
+    } else if cfg!(target_os = "macos") {
+        vec![(if read { "pbpaste" } else { "pbcopy" }, vec![])]
+    } else if read {
+        vec![("wl-paste", vec!["--no-newline"]), ("xclip", vec!["-selection", "clipboard", "-o"]), ("xsel", vec!["--clipboard", "--output"])]
+    } else {
+        vec![("wl-copy", vec![]), ("xclip", vec!["-selection", "clipboard"]), ("xsel", vec!["--clipboard", "--input"])]
+    }
+}
+/// Put text on the clipboard (used when the page's own clipboard call is refused).
 #[tauri::command]
 fn clip_set(text: String) -> Result<(), String> {
     use std::io::Write;
-    let mut c = std::process::Command::new("clip.exe");
-    c.stdin(std::process::Stdio::piped());
-    let mut child = quiet(c).spawn().map_err(|e| e.to_string())?;
     // clip.exe reads UTF-16 when the text starts with its byte-order mark; anything else is taken as the console's code page
-    let mut bytes: Vec<u8> = vec![0xFF, 0xFE];
-    for u in text.encode_utf16() { bytes.extend_from_slice(&u.to_le_bytes()); }
-    child.stdin.take().ok_or("no pipe to clip.exe")?.write_all(&bytes).map_err(|e| e.to_string())?;
-    child.wait().map(|_| ()).map_err(|e| e.to_string())
+    let bytes: Vec<u8> = if cfg!(windows) { let mut b = vec![0xFF, 0xFE]; for u in text.encode_utf16() { b.extend_from_slice(&u.to_le_bytes()); } b } else { text.into_bytes() };
+    let mut last = String::from("no clipboard program was found");
+    for (program, args) in clipboard_tools(false) {
+        let mut c = std::process::Command::new(program);
+        c.args(args).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        match quiet(c).spawn() {
+            Ok(mut child) => {
+                let wrote = child.stdin.take().map(|mut i| i.write_all(&bytes)).unwrap_or(Ok(()));
+                // wl-copy and xclip stay behind to serve the text: they are not waited for
+                if cfg!(windows) || cfg!(target_os = "macos") { let _ = child.wait(); }
+                return wrote.map_err(|e| e.to_string());
+            }
+            Err(e) => last = format!("{program}: {e}"),
+        }
+    }
+    Err(last)
 }
-/// The text on the Windows clipboard (used when the page's own clipboard call is refused). Empty when it holds no text.
+/// The text on the clipboard (used when the page's own clipboard call is refused). Empty when it holds no text.
 #[tauri::command(async)]
 fn clip_get() -> Result<String, String> {
-    let mut c = std::process::Command::new("powershell.exe");
-    c.args(["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $t = Get-Clipboard -Raw; if ($t) { [Console]::Out.Write($t) }"]);
-    let out = quiet(c).output().map_err(|e| e.to_string())?;
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    for (program, args) in clipboard_tools(true) {
+        let mut c = std::process::Command::new(program);
+        c.args(args);
+        if let Ok(out) = quiet(c).output() { if out.status.success() { return Ok(String::from_utf8_lossy(&out.stdout).to_string()); } }
+    }
+    Ok(String::new())
 }
 /// An error the page caught goes into maestro.log beside the config, so a blank or stuck screen leaves a trace.
 #[tauri::command]
 fn note(text: String) {
-    if let Some(dir) = config_path().and_then(|f| f.parent().map(|d| d.to_path_buf())).or_else(|| std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf()))) {
+    let beside = || if cfg!(windows) { std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) } else { app_data() };
+    if let Some(dir) = config_path().and_then(|f| f.parent().map(|d| d.to_path_buf())).or_else(beside) {
+        let _ = fs::create_dir_all(&dir);
         use std::io::Write;
         if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(dir.join("maestro.log")) {
             let line: String = text.replace(['\r', '\n'], " ").chars().take(600).collect();
@@ -1774,7 +1904,8 @@ fn main() {
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
-            tray.on_menu_event(|app, event| match event.id.as_ref() {
+            // a desktop without a tray (some Linux ones) must not stop the app: the key and the window still work
+            let built = tray.on_menu_event(|app, event| match event.id.as_ref() {
                 "show" => reveal(app),
                 "quit" => app.exit(0),
                 _ => {}
@@ -1784,11 +1915,12 @@ fn main() {
                     toggle(tray.app_handle());
                 }
             })
-            .build(app)?;
+            .build(app);
+            if let Err(e) = built { note(format!("no tray icon: {e}")); }
 
             // what an update left behind: the program it replaced
             if let Some(here) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
-                for name in ["maestro.exe.old", "Maestro.exe.old", "WebView2Loader.dll.old"] { let _ = fs::remove_file(here.join(name)); }
+                for name in ["maestro.exe.old", "Maestro.exe.old", "maestro.old", "WebView2Loader.dll.old"] { let _ = fs::remove_file(here.join(name)); }
             }
             // started by Windows at sign-in: stay in the tray until the key is pressed
             if !std::env::args().any(|a| a == "--hidden") {
@@ -2005,6 +2137,31 @@ mod tests {
         println!("the terminal side was asked for bracketed paste: {}", seen.contains("\x1b[?2004h"));
         println!("the program received: {:?}", seen.split("READY").nth(1).unwrap_or("").replace('\x1b', "<ESC>"));
     }
+    /// On macOS and Linux a project is its folder on this machine, and a session's scripts are written to this user's home.
+    #[test]
+    #[cfg(unix)]
+    fn a_local_project_is_worked_out_and_its_sessions_are_listed() {
+        let d = scratch("local");
+        fs::write(d.join("AGENTS.md"), "# x\n").unwrap();
+        fs::create_dir_all(d.join(".agents").join("rules")).unwrap();
+        let v = derive(&d.to_string_lossy(), None).unwrap();
+        assert_eq!(v["entry"]["runs"], "native");
+        assert_eq!(v["entry"]["wslRoot"], "");
+        assert!(v["entry"]["claudeHome"].as_str().unwrap().ends_with("/.claude"));
+        let root = v["entry"]["root"].as_str().unwrap().to_string();
+        assert!(v["entry"]["memoryDir"].as_str().unwrap().ends_with(&format!("/projects/{}/memory", dashed(&root))));
+        assert_eq!((v["found"]["dir"].as_str(), v["found"]["instructionsName"].as_str()), (Some(".agents"), Some("AGENTS.md")));
+        assert!(derive("relative/path", None).is_err() && derive("/no/such/folder/here", None).is_err());
+        let p = Project { name: "x".into(), root: PathBuf::from(&root), claude_home: home_dir().unwrap().join(".claude"), memory: d.join("memory"), wsl_root: String::new(), distro: String::new(), kit: String::new(), audits: vec![], native: false, dot: d.join(".agents"), instructions: d.join("AGENTS.md") };
+        assert_eq!(p.host(), Host::Local);
+        let l = launcher(&p).unwrap();
+        assert!(l.ends_with("/.local/share/maestro/term.sh") && Path::new(&l).exists());
+        let out = p.bash_command(false, &[&l, "--check"]).output().unwrap();
+        assert!(out.status.success(), "term.sh --check failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(p.bash_command(false, &[&l, "--list"]).output().unwrap().status.success());
+        assert!(p.bash_command(false, &[&l, "--nonsense"]).output().unwrap().status.code() == Some(2));
+        let _ = fs::remove_dir_all(&d);
+    }
     #[test]
     fn versions_are_compared_number_by_number() {
         assert!(newer("v0.10.1", "0.9.4") && newer("0.2.0", "0.1.9") && newer("1.0", "0.9.9"));
@@ -2014,25 +2171,25 @@ mod tests {
     #[test]
     fn an_update_is_swapped_in_and_a_bad_one_is_refused() {
         let (here, dl) = (scratch("swap-here"), scratch("swap-dl"));
-        let exe = here.join("maestro.exe");
+        let exe = here.join(EXE);
         fs::write(&exe, b"old").unwrap();
         fs::write(here.join("WebView2Loader.dll"), b"old-dll").unwrap();
         assert!(swap_in(&dl, &exe).is_err()); // nothing downloaded
-        fs::write(dl.join("maestro.exe"), b"tiny").unwrap();
+        fs::write(dl.join(EXE), b"tiny").unwrap();
         assert!(swap_in(&dl, &exe).is_err());
         assert_eq!(fs::read(&exe).unwrap(), b"old");
-        fs::write(dl.join("maestro.exe"), vec![7u8; 1_200_000]).unwrap();
+        fs::write(dl.join(EXE), vec![7u8; 1_200_000]).unwrap();
         fs::write(dl.join("WebView2Loader.dll"), b"new-dll").unwrap();
         swap_in(&dl, &exe).unwrap();
         assert_eq!(fs::read(&exe).unwrap().len(), 1_200_000);
-        assert_eq!(fs::read(here.join("maestro.exe.old")).unwrap(), b"old");
+        assert_eq!(fs::read(here.join(format!("{EXE}.old"))).unwrap(), b"old");
         assert_eq!(fs::read(here.join("WebView2Loader.dll")).unwrap(), b"new-dll");
         assert_eq!(fs::read(here.join("WebView2Loader.dll.old")).unwrap(), b"old-dll");
         let _ = (fs::remove_dir_all(&here), fs::remove_dir_all(&dl));
     }
     #[test]
     fn git_paths_and_ids_are_checked() {
-        assert_eq!(win_path("/mnt/d/projects/x/y"), PathBuf::from("D:\\projects\\x\\y"));
+        if cfg!(windows) { assert_eq!(win_path("/mnt/d/projects/x/y"), PathBuf::from("D:\\projects\\x\\y")); } else { assert_eq!(win_path("/mnt/d/projects/x/y"), PathBuf::from("/mnt/d/projects/x/y")); }
         assert_eq!(win_path("C:\\a"), PathBuf::from("C:\\a"));
         assert!(inside("src/a.js").is_ok());
         assert!(inside("../a").is_err() && inside("a/../../b").is_err() && inside("/etc/x").is_err() && inside("C:\\x").is_err());

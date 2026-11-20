@@ -7,8 +7,10 @@ Thanks for looking. Maestro is small on purpose: one Rust file, one page. Change
 - **The interface only:** `node tools/preview/serve.mjs`, then open `http://localhost:4173/?scene=full`. The page runs in your
   browser against an invented project (`tools/preview/stub.js`), so you need neither Rust nor a real project. Other scenes:
   `?scene=bare` (a project with nothing set up) and `?scene=welcome` (first run).
-- **The app:** `cd src-tauri && cargo build --release`, on Windows. From WSL, `tools/build.sh` does the same through the Windows
-  toolchain and checks the page's script first.
+- **The app:** `cd src-tauri && cargo build --release`. On Linux install the libraries first:
+  `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev`.
+  From WSL, `tools/build.sh` builds the Windows program through the Windows toolchain and checks the page's script first.
+- **How it looks on another system:** add `&os=macos` or `&os=linux` to the preview's address.
 - **Tests:** `cd src-tauri && cargo test` (or `tools/build.sh test`).
 
 ## Where things are
@@ -32,6 +34,10 @@ Thanks for looking. Maestro is small on purpose: one Rust file, one page. Change
 - **A new command gets a test** when it parses or writes something, and a canned answer in `tools/preview/stub.js` when the page
   calls it.
 - **If the page calls a new command, add it to `generate_handler!`** at the bottom of `main.rs`, or the call fails at run time.
+- **Three systems, one code path where possible.** What differs is decided in one place: `Project::host()` (inside WSL, on
+  Windows itself, or on this machine) on the Rust side and `OS` / `WIN` in the page. Prefer `if cfg!(windows)` to `#[cfg]` so
+  that every branch is still type-checked on every system. CI builds and tests Windows, Linux and both kinds of Mac; a compiler
+  error on a system you do not have shows up as an annotation on the run.
 - **A window-creating command is `async fn`.** Built from a blocking command, a second window opens blank on Windows.
 - **Words in the interface are plain.** Say what a button does; no exclamation marks; no "simply".
 - Commit messages follow Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`).
@@ -40,8 +46,9 @@ Thanks for looking. Maestro is small on purpose: one Rust file, one page. Change
 
 1. Set the new version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, and add its section to `CHANGELOG.md`.
 2. Commit, then tag it: `git tag v0.3.0 && git push origin main v0.3.0`.
-3. The Release workflow builds `maestro-windows-x64.zip` and attaches it to a **draft** release. Check it, paste the changelog
-   section as the notes, and publish. Only a published release is seen by the app's update check, and the zip must keep that name.
+3. The Release workflow builds each system's archive and attaches all four to one **draft** release. Check it, paste the
+   changelog section as the notes, and publish. Only a published release is seen by the app's update check, and the archives
+   must keep their names (`maestro-windows-x64.zip`, `maestro-linux-x64.tar.gz`, `maestro-macos-arm64.tar.gz`, `maestro-macos-x64.tar.gz`).
 
 ## Before you open a pull request
 

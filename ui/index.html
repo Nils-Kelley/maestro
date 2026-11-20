@@ -17,7 +17,9 @@
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; background: transparent; color: var(--fg); font: 13.5px/1.5 var(--sans); overflow: hidden; -webkit-font-smoothing: antialiased; }
-:root { color-scheme: dark; } /* the lists the system draws (a plain select) are dark too */
+:root { color-scheme: dark; }
+/* only Windows blurs what is behind the window; elsewhere the window is solid */
+html:not(.os-windows) { --glass: #0a0d12; } html:not(.os-windows) body { background: #0a0d12; } /* the lists the system draws (a plain select) are dark too */
 ::selection { background: rgba(92, 200, 255, 0.3); }
 #panel { position: absolute; inset: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; background: var(--glass); border: 1px solid var(--line2); border-radius: 0; overflow: hidden; }
 #panel::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, transparent, rgba(92, 200, 255, 0.55) 18%, rgba(92, 200, 255, 0.55) 34%, transparent 62%); pointer-events: none; }
@@ -294,6 +296,9 @@ body.pop { background: #0b0e13; } body.pop #panel { display: none; } .popterm { 
 <script src="vendor/addon-fit.js"></script>
 <script>
 const T = window.__TAURI__;
+// Which system this is. A few words and buttons differ: Windows has WSL and PowerShell; macOS and Linux have one shell, here.
+const OS = window.__OS || (/Windows/i.test(navigator.userAgent) ? 'windows' : /Mac/i.test(navigator.userAgent) ? 'macos' : 'linux'); const WIN = OS === 'windows';
+document.documentElement.classList.add('os-' + OS);
 // anything that goes wrong is written to maestro.log, and the intro can never be what is left on screen
 const trouble = (what) => { try { T.core.invoke('note', { text: String(what) }); } catch (_) {} const b = document.getElementById('boot'); if (b) b.hidden = true; };
 addEventListener('error', (e) => trouble(`${e.message} @ ${e.lineno}:${e.colno}`));
@@ -542,7 +547,8 @@ async function gitShowTreeFile(path) {
 function gitReset() { clearTimeout(G.timer); Object.assign(G, { repos: null, repo: null, sub: 'changes', status: null, log: null, sel: null, commit: null, open: new Set(['']), tree: {}, sig: '', at: 0 }); }
 // ---- the console: Claude Code, Ubuntu and PowerShell sessions, from every project, as tabs and tiles ----
 const CC = { list: [], active: null, n: 0, draft: '', running: [], at: 0, layout: localStorage.getItem('layout') == null ? 0 : Number(localStorage.getItem('layout')), launch: false, proj: null, restored: false, sig: '' };
-const KINDS = { claude: 'Claude Code', ubuntu: 'Ubuntu', powershell: 'PowerShell' };
+const KINDS = { claude: 'Claude Code', ubuntu: WIN ? 'Ubuntu' : 'Shell', powershell: 'PowerShell' };
+const SIGNIN = WIN ? 'when Windows starts' : 'when you sign in';
 const TERM_THEME = { background: 'rgba(0,0,0,0)', foreground: '#e6e9ee', cursor: '#5cc8ff', cursorAccent: '#0a0d12', selectionBackground: 'rgba(92,200,255,0.3)', black: '#1b2028', brightBlack: '#5a6270', red: '#f0605f', brightRed: '#ff8f8a', green: '#3ecf72', brightGreen: '#74e39a', yellow: '#f0b429', brightYellow: '#ffd166', blue: '#5b9cf0', brightBlue: '#8fbcff', magenta: '#c4a7ff', brightMagenta: '#dcc8ff', cyan: '#5cc8ff', brightCyan: '#9be0ff', white: '#c0c6cf', brightWhite: '#ffffff' };
 const ccGet = (id) => CC.list.find((x) => x.id === id);
 const ccProj = () => (CC.proj == null || CC.proj >= PROJ.names.length ? PROJ.current : CC.proj);
@@ -562,7 +568,7 @@ function closeMenu() { if (!MENU) return; MENU.el.remove(); if (MENU.btn.isConne
 function menuRows() { const q = MENU.q.value.trim().toLowerCase(); const { favs, rest } = projOrder(); const ok = (i) => !q || PROJ.names[i].toLowerCase().includes(q) || String(PROJ.roots[i] || '').toLowerCase().includes(q); return { favs: favs.filter(ok), rest: rest.filter(ok) }; }
 function drawMenu() {
   const { favs, rest } = menuRows(); const order = [...favs, ...rest]; MENU.order = order; MENU.at = Math.max(0, Math.min(order.length - 1, MENU.at));
-  const row = (i) => { const n = CC.list.filter((x) => x.live && x.project === PROJ.names[i]).length; return `<div class="mi" role="option" data-mi="${i}" aria-selected="${order[MENU.at] === i}"><button class="star${isFav(i) ? ' on' : ''}" type="button" data-mfav="${i}" title="${isFav(i) ? 'Take it off your favourites' : 'Make it a favourite'}" aria-pressed="${isFav(i)}">${isFav(i) ? '★' : '☆'}</button><span class="nm">${esc(PROJ.names[i])}</span><span class="mt">${n ? `${n} running` : ''}${PROJ.native && PROJ.native[i] ? `${n ? ', ' : ''}Windows` : ''}</span><span class="ck">${i === MENU.selected ? '✓' : ''}</span></div>`; };
+  const row = (i) => { const n = CC.list.filter((x) => x.live && x.project === PROJ.names[i]).length; return `<div class="mi" role="option" data-mi="${i}" aria-selected="${order[MENU.at] === i}"><button class="star${isFav(i) ? ' on' : ''}" type="button" data-mfav="${i}" title="${isFav(i) ? 'Take it off your favourites' : 'Make it a favourite'}" aria-pressed="${isFav(i)}">${isFav(i) ? '★' : '☆'}</button><span class="nm">${esc(PROJ.names[i])}</span><span class="mt">${n ? `${n} running` : ''}${WIN && PROJ.native && PROJ.native[i] ? `${n ? ', ' : ''}Windows` : ''}</span><span class="ck">${i === MENU.selected ? '✓' : ''}</span></div>`; };
   $('.ml', MENU.el).innerHTML = order.length ? `${favs.length ? `<div class="mg">Favourites</div>${favs.map(row).join('')}` : ''}${rest.length ? `${favs.length ? '<div class="mg">All projects</div>' : ''}${rest.map(row).join('')}` : ''}` : '<div class="none">No project matches.</div>';
   const cur = $('.mi[aria-selected="true"]', MENU.el); if (cur) cur.scrollIntoView({ block: 'nearest' });
 }
@@ -589,7 +595,7 @@ function ccChord(e) {
   if (e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) { const x = CC.list[Number(e.key) - 1]; if (x) ccShow(x.id); return true; }
   if (e.ctrlKey && e.key === 'Tab') { if (CC.list.length) { const i = CC.list.findIndex((x) => x.id === CC.active); ccShow(CC.list[(i + (e.shiftKey ? CC.list.length - 1 : 1)) % CC.list.length].id); } return true; }
   if (!e.ctrlKey || !e.shiftKey) return false;
-  if (k === 'n') { ccStart('claude'); return true; } if (k === 'u') { ccStart('ubuntu'); return true; } if (k === 'p') { ccStart('powershell'); return true; }
+  if (k === 'n') { ccStart('claude'); return true; } if (k === 'u') { ccStart('ubuntu'); return true; } if (k === 'p') { if (WIN) ccStart('powershell'); return true; }
   if (k === 'o') { const x = ccGet(CC.active); if (x) ccPop(x.id); return true; }
   if (k === 'l') { ccSetLayout({ 0: 1, 1: 2, 2: 4, 4: 6, 6: 0 }[CC.layout] ?? 1); return true; }
   if (k === 'a') { ccSetLayout(0); return true; }
@@ -646,7 +652,7 @@ function drawDock() {
     dock.dataset.ctl = ctl;
     const nat = !!(PROJ.native && PROJ.native[ccProj()]);
     dock.innerHTML = `<div class="tabs"></div><div class="dr"><div class="launch" role="group" aria-label="Start a session">${pickBtn('cproj', ccProj(), 'Start in')}
-      <button class="lseg claude" data-cterm="claude" title="New Claude Code session (Ctrl+Shift+N)">${kindMark('claude')}Claude</button>${nat ? '' : `<button class="lseg ubuntu" data-cterm="ubuntu" title="New Ubuntu terminal (Ctrl+Shift+U)">${kindMark('ubuntu')}Ubuntu</button>`}<button class="lseg powershell" data-cterm="powershell" title="New PowerShell terminal (Ctrl+Shift+P)">${kindMark('powershell')}PowerShell</button>
+      <button class="lseg claude" data-cterm="claude" title="New Claude Code session (Ctrl+Shift+N)">${kindMark('claude')}Claude</button>${nat ? '' : `<button class="lseg ubuntu" data-cterm="ubuntu" title="New ${WIN ? 'Ubuntu terminal' : 'shell'} (Ctrl+Shift+U)">${kindMark('ubuntu')}${KINDS.ubuntu}</button>`}${WIN ? `<button class="lseg powershell" data-cterm="powershell" title="New PowerShell terminal (Ctrl+Shift+P)">${kindMark('powershell')}PowerShell</button>` : ''}
       ${CC.list.length ? `<button class="lseg more" data-claunch title="${CC.launch ? 'Back to the sessions (Esc)' : 'Start with a message, resume, or reopen a running session (Ctrl+Shift+K)'}">${CC.launch ? 'Back to the sessions' : 'More…'}</button>` : ''}</div>
     <span class="gap dim">Show</span><span class="lay" role="group" aria-label="How many sessions to show at once" title="All at a glance (Ctrl+Shift+A), or sessions side by side (Ctrl+Shift+L)"><button data-clay="0" aria-pressed="${CC.layout === 0}">All</button>${[1, 2, 4, 6].map((n) => `<button data-clay="${n}" aria-pressed="${CC.layout === n}">${n}</button>`).join('')}</span></div>`;
   }
@@ -684,7 +690,7 @@ function ccTyped(x, d) {
 }
 // take a session off the screen; `end` also stops the program (a Claude or Ubuntu session otherwise keeps running in WSL)
 function ccEnd(id, end = true) { const x = ccGet(id); if (!x) return; const i = CC.list.indexOf(x); invoke('term_close', { id, name: x.name || null, end }).catch(() => {}).then(() => setTimeout(ccRefresh, 600)); x.live = false; x.term.dispose(); x.tile.remove(); CC.list.splice(i, 1); if (CC.active === id) CC.active = (CC.list[Math.min(i, CC.list.length - 1)] || {}).id || null; drawTabs(); drawClaude(); const y = ccGet(CC.active); if (y && tab === 'claude') y.term.focus(); }
-async function ccPop(id) { const x = ccGet(id); if (!x) return; if (!x.keeps || !x.live || !x.name) return say('Only a running Claude or Ubuntu session can have a window of its own', 'bad'); try { await invoke('pop_out', { name: x.name, kind: x.kind, label: `${x.label} · ${x.project}` }); ccEnd(id, false); } catch (e) { say(String(e), 'bad'); } }
+async function ccPop(id) { const x = ccGet(id); if (!x) return; if (!x.keeps || !x.live || !x.name) return say('Only a running session that outlives Maestro can have a window of its own', 'bad'); try { await invoke('pop_out', { name: x.name, kind: x.kind, label: `${x.label} · ${x.project}` }); ccEnd(id, false); } catch (e) { say(String(e), 'bad'); } }
 function ccLauncher(on) { CC.launch = on; drawClaude(); if (on) { const ta = $('#cprompt'); if (ta) ta.focus(); } else { const x = ccGet(CC.active); if (x) x.term.focus(); } }
 function drawLauncher() {
   const el = $('.claunch'); if (!el) return; const show = CC.launch || !CC.list.length; el.hidden = !show; if (!show) return;
@@ -692,17 +698,17 @@ function drawLauncher() {
   const S = D.sessions || {}; const old = ccProj() === PROJ.current ? ((S.recent || []).some((s) => s.ask) ? S.recent : S.past || []).filter((s) => s.ask).slice(0, 8) : [];
   const nat = !!(PROJ.native && PROJ.native[ccProj()]); const when = (up) => typeof up === 'number' ? new Date(up * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : String(up).slice(0, 16).replace('T', ' ');
   if (!CC.check) CC.check = {}; const ck = CC.check[ccProj()]; if (ck === undefined && ccProj() === PROJ.current && PROJ.names.length) { CC.check[ccProj()] = null; const at = ccProj(); invoke('term_check').then((c) => { CC.check[at] = c; if (tab === 'claude' && !$('#cprompt').value) drawLauncher(); }).catch(() => {}); }
-  const missing = !ck ? '' : !ck.claude ? `Claude Code was not found ${ck.native ? 'on Windows' : 'in ' + ck.distro}: install it there first, then start a session.` : (!ck.native && !ck.tmux) ? `tmux was not found in ${ck.distro}, so sessions end when Maestro closes. Install it (for example sudo apt install tmux) and they keep running.` : '';
+  const missing = !ck ? '' : !ck.claude ? `Claude Code was not found ${ck.place}: install it there first, then start a session.` : (!ck.native && !ck.tmux) ? `tmux was not found ${ck.place}, so sessions end when Maestro closes. Install it (for example ${ck.install}) and they keep running.` : '';
   const keep = $('#cprompt') ? $('#cprompt').value : CC.draft; const pn = PROJ.names[ccProj()] || '';
   el.innerHTML = `<div class="col"><h1>Start Claude Code in ${PROJ.names.length > 1 ? pickBtn('cproj', ccProj()) : esc(pn)}</h1>${missing ? `<p class="warn">${esc(missing)}</p>` : ''}<p>Tell it what to do, or leave the box empty to just open a session. It runs with that project's rules, hooks, skills and memory, and asks before anything your settings do not already allow.</p>
     <textarea id="cprompt" placeholder="What should it do?" spellcheck="false"></textarea>
     <div class="row"><button class="act go" data-cgo>Start</button><span class="dim"><kbd>Ctrl</kbd> <kbd>Enter</kbd></span><button class="act" data-ccont>Continue the last conversation</button></div>
-    <h2>Or open a terminal in ${esc(pn)}</h2><div class="row" style="margin-top:0">${nat ? '' : `<button class="act" data-cterm="ubuntu">${kindMark('ubuntu')}Ubuntu</button>`}<button class="act" data-cterm="powershell">${kindMark('powershell')}PowerShell</button></div>
-    ${PROJ.names.length > 1 ? `<h2>${projOrder().favs.length ? 'One click, your favourites' : 'One click, any project'}</h2><div class="matrix">${(projOrder().favs.length ? projOrder().favs : projOrder().rest.slice(0, 8)).map((i) => [PROJ.names[i], i]).map(([n, i]) => `<span class="n"><button class="star${isFav(i) ? ' on' : ''}" data-fav="${i}" title="${isFav(i) ? 'Take it off your favourites' : 'Make it a favourite: it stays in this list and comes first in every project picker'}" aria-label="${isFav(i) ? 'Take ' + esc(n) + ' off your favourites' : 'Make ' + esc(n) + ' a favourite'}" aria-pressed="${isFav(i)}">${isFav(i) ? '★' : '☆'}</button>${esc(n)}</span><button class="act" data-cterm="claude" data-p="${i}">${kindMark('claude')}Claude</button>${PROJ.native && PROJ.native[i] ? '<span></span>' : `<button class="act" data-cterm="ubuntu" data-p="${i}">${kindMark('ubuntu')}Ubuntu</button>`}<button class="act" data-cterm="powershell" data-p="${i}">${kindMark('powershell')}PowerShell</button>`).join('')}</div>${projOrder().rest.length > (projOrder().favs.length ? 0 : 8) ? `<div class="row" style="margin-top:8px"><select class="in" id="favadd" aria-label="Add a favourite"><option value="">${projOrder().favs.length ? 'Add a favourite…' : 'Star another project…'}</option>${projOrder().rest.map((i) => `<option value="${i}">${esc(PROJ.names[i])}</option>`).join('')}</select><span class="dim">Favourites stay in this list and come first in every project picker.</span></div>` : ''}` : ''}</div>
+    <h2>Or open a terminal in ${esc(pn)}</h2><div class="row" style="margin-top:0">${nat ? '' : `<button class="act" data-cterm="ubuntu">${kindMark('ubuntu')}${KINDS.ubuntu}</button>`}${WIN ? `<button class="act" data-cterm="powershell">${kindMark('powershell')}PowerShell</button>` : ''}</div>
+    ${PROJ.names.length > 1 ? `<h2>${projOrder().favs.length ? 'One click, your favourites' : 'One click, any project'}</h2><div class="matrix">${(projOrder().favs.length ? projOrder().favs : projOrder().rest.slice(0, 8)).map((i) => [PROJ.names[i], i]).map(([n, i]) => `<span class="n"><button class="star${isFav(i) ? ' on' : ''}" data-fav="${i}" title="${isFav(i) ? 'Take it off your favourites' : 'Make it a favourite: it stays in this list and comes first in every project picker'}" aria-label="${isFav(i) ? 'Take ' + esc(n) + ' off your favourites' : 'Make ' + esc(n) + ' a favourite'}" aria-pressed="${isFav(i)}">${isFav(i) ? '★' : '☆'}</button>${esc(n)}</span><button class="act" data-cterm="claude" data-p="${i}">${kindMark('claude')}Claude</button>${PROJ.native && PROJ.native[i] ? '<span></span>' : `<button class="act" data-cterm="ubuntu" data-p="${i}">${kindMark('ubuntu')}${KINDS.ubuntu}</button>`}${WIN ? `<button class="act" data-cterm="powershell" data-p="${i}">${kindMark('powershell')}PowerShell</button>` : '<span></span>'}`).join('')}</div>${projOrder().rest.length > (projOrder().favs.length ? 0 : 8) ? `<div class="row" style="margin-top:8px"><select class="in" id="favadd" aria-label="Add a favourite"><option value="">${projOrder().favs.length ? 'Add a favourite…' : 'Star another project…'}</option>${projOrder().rest.map((i) => `<option value="${i}">${esc(PROJ.names[i])}</option>`).join('')}</select><span class="dim">Favourites stay in this list and come first in every project picker.</span></div>` : ''}` : ''}</div>
     <div class="col">${away.length ? `<h2>Still running, not on screen${away.length > 1 ? ` <button data-cattall style="background:none;border:0;color:var(--accent);font:inherit;cursor:pointer;margin-left:8px">open all ${away.length}</button>` : ''}</h2>${away.map((r) => `<div class="sess" role="button" tabindex="0" data-catt="${esc(r.name)}" data-kind="${esc(r.kind)}" data-label="${esc(r.label)}" data-path="${esc(r.path)}" title="Open it again, scroll-back and all">${kindMark(r.kind)}<span><span class="t">${esc(r.label || r.name)}</span><span class="s">${esc(r.path.split('/').pop())} · started ${sinceWord(r.created)}${r.attached ? ' · open in another window' : ''}</span></span><span class="x" data-ckill="${esc(r.name)}" title="End this session">×</span></div>`).join('')}` : ''}
     ${old.length ? `<h2>Resume an earlier conversation in ${esc(pn)}</h2>${old.map((s2) => `<button class="old" data-cres="${esc(s2.id)}" title="Resume this conversation"><span class="t">${esc(s2.ask)}</span><span class="s">${esc(when(s2.up))}</span></button>`).join('')}` : ''}
-    <h2>Keys</h2><div class="keys"><span><kbd>Alt</kbd> <kbd>1</kbd>…<kbd>9</kbd>, <kbd>Ctrl</kbd> <kbd>Tab</kbd></span><span>switch session</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>N</kbd> / <kbd>U</kbd> / <kbd>P</kbd></span><span>new Claude, Ubuntu, PowerShell</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>A</kbd> / <kbd>L</kbd></span><span>all at a glance, side by side</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>O</kbd></span><span>the session in its own window</span><span>Highlight text</span><span>copies it</span><span><kbd>Ctrl</kbd> <kbd>V</kbd> or right click</span><span>paste</span></div>
-    <p style="margin-top:14px;font-size:12.5px">${nat ? 'In a project that runs on Windows itself, sessions end with Maestro.' : 'Claude and Ubuntu sessions keep running when Maestro closes and come back when it starts. PowerShell ends with Maestro.'}</p></div>`;
+    <h2>Keys</h2><div class="keys"><span><kbd>Alt</kbd> <kbd>1</kbd>…<kbd>9</kbd>, <kbd>Ctrl</kbd> <kbd>Tab</kbd></span><span>switch session</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>N</kbd> / <kbd>U</kbd>${WIN ? ' / <kbd>P</kbd>' : ''}</span><span>new Claude, ${WIN ? 'Ubuntu, PowerShell' : 'shell'}</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>A</kbd> / <kbd>L</kbd></span><span>all at a glance, side by side</span><span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>O</kbd></span><span>the session in its own window</span><span>Highlight text</span><span>copies it</span><span><kbd>Ctrl</kbd> <kbd>V</kbd> or right click</span><span>paste</span></div>
+    <p style="margin-top:14px;font-size:12.5px">${nat ? 'In a project that runs on Windows itself, sessions end with Maestro.' : WIN ? 'Claude and Ubuntu sessions keep running when Maestro closes and come back when it starts. PowerShell ends with Maestro.' : 'Sessions keep running when Maestro closes and come back when it starts (they live in tmux).'}</p></div>`;
   const ta = $('#cprompt'); if (ta && keep) ta.value = keep;
 }
 // What a session is showing right now, read from its terminal: the line that says what it is doing, and the last few lines.
@@ -789,8 +795,8 @@ function actions() {
   const add = (title, sub, run) => A.push({ kind: 'action', title, sub, run, text: '' });
   add('New Claude Code session', 'Start the agent, with a first message if you like', () => { setTab('claude'); ccLauncher(true); });
   add('Continue the last Claude Code session', 'Pick up the most recent conversation here', () => { setTab('claude'); ccStart('claude', { mode: 'continue' }); });
-  add('New Ubuntu terminal', 'A shell in WSL, in this project', () => { setTab('claude'); ccStart('ubuntu'); });
-  add('New PowerShell terminal', 'Windows PowerShell, in this project', () => { setTab('claude'); ccStart('powershell'); });
+  add(WIN ? 'New Ubuntu terminal' : 'New shell', WIN ? 'A shell in WSL, in this project' : 'Your shell, in this project', () => { setTab('claude'); ccStart('ubuntu'); });
+  if (WIN) add('New PowerShell terminal', 'Windows PowerShell, in this project', () => { setTab('claude'); ccStart('powershell'); });
   add('New memory', 'Write a fact the agent keeps', () => newForm('memory'));
   add('New skill', 'Write a procedure the agent can follow', () => newForm('skill'));
   for (const [k, t] of TABS.slice(1)) add(`Go to ${t}`, 'Open that view', () => setTab(k));
@@ -801,8 +807,8 @@ function actions() {
   add('Set up a starter harness', 'Instructions, rules, a work log and three skills, written only where they are missing', () => { PLAN = null; setTab('setup'); });
   if (D.project.kit) add('Run the probe audit', 'About twenty seconds; shows which passes still count', () => { setTab('checks'); const b = $('[data-audit]'); if (b) b.click(); });
   add('Read the files again', 'Reload everything from disk', () => reload().then(() => { drawList(); say('Read again from the files', 'ok'); }));
-  add('Start with Windows: turn on', 'Maestro waits in the tray until you press the key', () => invoke('autostart_set', { on: true }).then(() => say('Maestro will start with Windows', 'ok')));
-  add('Start with Windows: turn off', 'Stop starting Maestro at sign-in', () => invoke('autostart_set', { on: false }).then(() => say('Maestro will not start with Windows', 'ok')));
+  add('Start at sign-in: turn on', 'Maestro waits in the tray until you press the key', () => invoke('autostart_set', { on: true }).then(() => say(`Maestro will start ${SIGNIN}`, 'ok')));
+  add('Start at sign-in: turn off', 'Stop starting Maestro at sign-in', () => invoke('autostart_set', { on: false }).then(() => say(`Maestro will not start ${SIGNIN}`, 'ok')));
   add('Hide', 'Back to what you were doing', () => invoke('hide'));
   add('Minimize', 'Down to the taskbar', () => invoke('minimize'));
   add(`Intro at start: turn ${localStorage.getItem('intro') === 'off' ? 'on' : 'off'}`, 'The boot sequence shown when Maestro starts', () => { const off = localStorage.getItem('intro') === 'off'; localStorage.setItem('intro', off ? 'on' : 'off'); say(off ? 'The intro will play at start' : 'The intro will not play', 'ok'); });
@@ -867,7 +873,7 @@ function drawHome() {
       ${D.log.length ? read('work', D.log.length, 'Work entries', `${sum60} in the last 60 days`) : ''}
     </div></section>
   </div>
-  <p style="margin:16px 0 0"><label class="chk"><input type="checkbox" id="auto"> Start Maestro when Windows starts</label></p>`;
+  <p style="margin:16px 0 0"><label class="chk"><input type="checkbox" id="auto"> Start Maestro ${SIGNIN}</label></p>`;
   drawAgents();
   requestAnimationFrame(() => requestAnimationFrame(() => document.querySelectorAll('[data-w]').forEach((el) => { el.style.width = el.dataset.w + '%'; })));
   invoke('autostart_get').then((on) => { const c = $('#auto'); if (c) c.checked = !!on; }).catch(() => {});
@@ -965,7 +971,7 @@ const projOrder = () => { const all = PROJ.names.map((n, i) => i); const byName 
 function drawProjectsPage() {
   const f = FOUND, e = f && f.entry, x = f && f.found, first = !PROJ.names.length;
   const facts = !f ? [] : [
-    `Claude Code runs ${e.runs === 'windows' ? 'on Windows' : 'inside WSL (' + e.distro + ')'} for this folder${x.worked ? ' and has worked in it before' : ''}`,
+    e.runs === 'native' ? (x.worked ? 'Claude Code has worked in this folder before' : 'Claude Code has not worked in this folder yet') : `Claude Code runs ${e.runs === 'windows' ? 'on Windows' : 'inside WSL (' + e.distro + ')'} for this folder${x.worked ? ' and has worked in it before' : ''}`,
     x.claude ? `Its harness is kept in ${x.dir}` : 'It has no .claude or .agents folder yet',
     x.instructions ? `${x.instructionsName} is there` : 'No CLAUDE.md or AGENTS.md',
     [x.rules ? `${x.rules} rules file${x.rules === 1 ? '' : 's'}` : 'no rules', x.skills ? `${x.skills} skill${x.skills === 1 ? '' : 's'}` : 'no skills', x.log ? `${x.log} log entries` : 'no work log'].join(' · ').replace(/^./, (c) => c.toUpperCase()),
@@ -974,14 +980,14 @@ function drawProjectsPage() {
     !x.instructions && !x.rules && !x.skills ? 'Nothing is set up: after adding it, Maestro offers a starter harness and shows every file before writing it' : '',
   ].filter(Boolean);
   const both = f && f.choices && f.choices.wsl && f.choices.windows;
-  const M = MACHINE; const have = !M ? '' : [M.distros.length ? `WSL with ${M.distros.join(', ')}` : 'no WSL', M.windowsClaudeExe ? 'Claude Code on Windows' : M.windowsClaude ? 'a Claude folder on Windows' : ''].filter(Boolean).join(' · ');
+  const M = MACHINE; const have = !M ? '' : [WIN ? (M.distros.length ? `WSL with ${M.distros.join(', ')}` : 'no WSL') : '', M.claudeProgram ? `Claude Code${WIN ? ' on Windows' : ''}` : M.claudeFolder ? `a Claude folder${WIN ? ' on Windows' : ''}` : WIN ? '' : 'no Claude Code yet (install it, then come back)'].filter(Boolean).join(' · ');
   if (first && !M) invoke('machine').then((m) => { MACHINE = m; if (tab === 'projects' && !FOUND) drawProjectsPage(); }).catch(() => {});
   $('#view').innerHTML = (first ? `<h1>Welcome to Maestro</h1><p class="lead">Maestro shows what your coding agent is given in a project (its instructions, rules, skills, memory and hooks) and runs your Claude Code sessions side by side. It reads the files that are already in the project; nothing is uploaded and nothing is changed until you say so.</p>
   <p class="lead">Start by pointing it at a project folder. It works with a project that already has a harness (<code>CLAUDE.md</code> and <code>.claude/</code>, or <code>AGENTS.md</code> and <code>.agents/</code>), and for one that has nothing yet it can write a starter.</p>${have ? `<p class="dim">Found on this machine: ${esc(have)}.</p>` : ''}`
   : `<h1>Projects</h1><p class="lead">The folders this app can open. Star the ones you use most: favourites come first in every project picker and get one-click start buttons in the Console. Removing a project only takes it off this list; nothing in its folder is touched.</p>
   ${tbl(['', 'Project', 'Folder', ''], [...projOrder().favs, ...projOrder().rest].map((i) => [PROJ.names[i], i]).map(([n, i]) => `<tr><td class="k"><button class="star${isFav(i) ? ' on' : ''}" data-fav="${i}" title="${isFav(i) ? 'Take off the favourites' : 'Make it a favourite: favourites come first in every project list'}" aria-pressed="${isFav(i)}">${isFav(i) ? '★' : '☆'}</button></td><td>${esc(n)}${i === PROJ.current ? ' <span class="dim">open now</span>' : ''}</td><td class="dim"><code>${esc(PROJ.roots[i])}</code></td><td class="k">${i === PROJ.current ? '' : `<button class="act" data-open="${i}">Open</button> `}${PROJ.names.length > 1 ? `<button class="act" data-rm="${i}">Remove</button>` : ''}</td></tr>`))}`) + `
   <h3 class="sec">${first ? 'Your first project' : 'Add a project'}</h3>
-  <div class="form"><label for="p-folder">Folder</label><div class="row" style="flex-wrap:nowrap"><input class="in" id="p-folder" placeholder="D:\\projects\\my-site   or   /mnt/d/projects/my-site   or   /home/me/my-site" autocomplete="off" spellcheck="false" value="${esc(f ? f.typed : '')}"><button class="act" data-browse>Browse…</button><button class="act" data-look>Check</button></div>
+  <div class="form"><label for="p-folder">Folder</label><div class="row" style="flex-wrap:nowrap"><input class="in" id="p-folder" placeholder="${WIN ? 'D:\\projects\\my-site   or   /mnt/d/projects/my-site   or   /home/me/my-site' : '~/projects/my-site'}" autocomplete="off" spellcheck="false" value="${esc(f ? f.typed : '')}"><button class="act" data-browse>Browse…</button><button class="act" data-look>Check</button></div>
   ${f ? `<label for="p-name">Name</label><input class="in" id="p-name" value="${esc(e.name)}" autocomplete="off" spellcheck="false">
   ${both ? `<label for="p-runs">Agent runs</label><select class="in" id="p-runs"><option value="wsl"${e.runs === 'wsl' ? ' selected' : ''}>inside WSL (${esc(f.choices.distro)})</option><option value="windows"${e.runs === 'windows' ? ' selected' : ''}>on Windows</option></select>` : ''}
   <label>Found</label><div>${facts.map((t) => `<div>${esc(t)}</div>`).join('')}<div class="dim" style="margin-top:6px">Memory is read from <code>${esc(e.memoryDir)}</code></div></div>
@@ -997,7 +1003,7 @@ async function drawUpdate() {
   const U = UPD; const ends = CC.list.filter((x) => x.live && !x.keeps).length;
   v.innerHTML = `${head}<p class="lead">This is Maestro ${esc(U.current)}. ${U.error ? `<span class="bad">${esc(U.error)}</span>` : U.newer ? `<b>Version ${esc(U.latest)} is available</b>${U.published ? `, published ${esc(String(U.published).slice(0, 10))}` : ''}.` : `It is the latest release.`}</p>
   ${U.newer ? `<div class="row" style="margin-bottom:6px">${U.asset ? `<button class="act go" data-updgo>Install ${esc(U.latest)} and restart</button>` : ''}<button class="act" data-updpage="${esc(U.tag)}">Open the release page</button></div>
-  <p class="dim" style="max-width:78ch">${U.asset ? `Installing downloads the build from this project's GitHub releases, puts it in place of this program and starts it again. Your projects and settings are kept. ${ends ? `It ends ${ends} session${ends === 1 ? '' : 's'} that run${ends === 1 ? 's' : ''} on Windows; sessions inside WSL keep running and come back.` : 'Sessions inside WSL keep running and come back.'} The download is not signed: if you would rather build it yourself, open the release page.` : 'This release carries no ready build: open its page to see how to get it.'}</p>
+  <p class="dim" style="max-width:78ch">${U.asset ? `Installing downloads the build from this project's GitHub releases, puts it in place of this program and starts it again. Your projects and settings are kept. ${ends ? `It ends ${ends} session${ends === 1 ? '' : 's'} that run${ends === 1 ? 's' : ''} on Windows; sessions inside WSL keep running and come back.` : WIN ? 'Sessions inside WSL keep running and come back.' : 'Your sessions keep running and come back.'} The download is not signed: if you would rather build it yourself, open the release page.` : 'This release carries no ready build: open its page to see how to get it.'}</p>
   ${U.notes ? `<h3 class="sec">What changed in ${esc(U.latest)}</h3><div class="text">${rich(U.notes)}</div>` : ''}` : `<div class="row"><button class="act" data-updagain>Check again</button></div>`}
   <p style="margin:18px 0 0"><label class="chk"><input type="checkbox" id="updauto"${U.auto ? ' checked' : ''}> Check when Maestro starts</label></p>
   <p class="dim" style="max-width:78ch;margin-top:6px">Off, Maestro never uses the network on its own; it asks only when you open this screen. On, it asks GitHub once at each start which release is the latest. Nothing about you or your projects is sent.</p>`;
@@ -1027,7 +1033,7 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'updauto') return invoke('update_auto_set', { on: e.target.checked }).then((on) => { UPD.auto = !!on; say(on ? 'Maestro will check for updates when it starts' : 'Maestro will only check when you ask', 'ok'); }).catch((err) => { e.target.checked = !e.target.checked; say(String(err), 'bad'); });
   if (e.target.id === 'favadd') { if (e.target.value !== '') setFav(Number(e.target.value), true); return; }
   if (e.target.id === 'p-runs') return look(FOUND.typed, e.target.value);
-  if (e.target.id === 'auto') invoke('autostart_set', { on: e.target.checked }).then((on) => { e.target.checked = !!on; say(on ? 'Maestro will start with Windows' : 'Maestro will not start with Windows', 'ok'); }).catch((err) => { e.target.checked = !e.target.checked; say(String(err), 'bad'); }); });
+  if (e.target.id === 'auto') invoke('autostart_set', { on: e.target.checked }).then((on) => { e.target.checked = !!on; say(on ? `Maestro will start ${SIGNIN}` : `Maestro will not start ${SIGNIN}`, 'ok'); }).catch((err) => { e.target.checked = !e.target.checked; say(String(err), 'bad'); }); });
 function setTab(k) { if (D.empty) k = 'projects'; tab = k; sel = 0; fitTabs(); nameView(); drawTabs(); search(); drawList(); $('#q').focus(); }
 
 $('#q').addEventListener('input', () => { if (tab === 'git' && !$('#q').value.trimStart().startsWith('>') && G.status && $('.gbody')) return gitDraw(true); sel = 0; search(); drawList(); });
