@@ -1212,7 +1212,9 @@ fn git_repos(cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, Str
 #[tauri::command(async)]
 fn git_status(repo: String, cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, String> {
     let p = project(&cur, &window)?;
-    let dir = repo_dir(&p, &repo)?;
+    git_status_of(&repo_dir(&p, &repo)?, &repo)
+}
+fn git_status_of(dir: &Path, repo: &str) -> Result<Value, String> {
     let started = std::time::Instant::now();
     let out = git(&dir, &["status", "--porcelain=v2", "--branch", "--untracked-files=normal"])?;
     let (mut branch, mut upstream, mut ahead, mut behind) = (String::new(), String::new(), 0i64, 0i64);
@@ -1251,8 +1253,10 @@ fn git_status(repo: String, cur: State<Cur>, window: tauri::WebviewWindow) -> Re
 #[tauri::command(async)]
 fn git_log(repo: String, skip: usize, cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, String> {
     let p = project(&cur, &window)?;
-    let dir = repo_dir(&p, &repo)?;
-    let out = git(&dir, &["log", "-n", "80", &format!("--skip={skip}"), "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%ar%x1f%s%x1f%D%x1e"])?;
+    git_log_of(&repo_dir(&p, &repo)?, skip, 80)
+}
+fn git_log_of(dir: &Path, skip: usize, n: usize) -> Result<Value, String> {
+    let out = git(dir, &["log", "-n", &n.to_string(), &format!("--skip={skip}"), "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%ar%x1f%s%x1f%D%x1e"])?;
     let unpushed: std::collections::HashSet<String> = git(&dir, &["log", "--pretty=format:%H", "@{upstream}..HEAD"]).unwrap_or_default().lines().map(|l| l.to_string()).collect();
     Ok(json!(out.split('\u{1e}').filter_map(|rec| {
         let f: Vec<&str> = rec.trim_start_matches('\n').split('\u{1f}').collect();
@@ -1264,8 +1268,10 @@ fn git_log(repo: String, skip: usize, cur: State<Cur>, window: tauri::WebviewWin
 #[tauri::command(async)]
 fn git_commit(repo: String, sha: String, cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, String> {
     let p = project(&cur, &window)?;
-    let dir = repo_dir(&p, &repo)?;
-    let out = git(&dir, &["show", "--numstat", "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%H%x1f%an%x1f%ae%x1f%ad%x1f%B%x1e", hexish(&sha)?])?;
+    git_commit_of(&repo_dir(&p, &repo)?, &sha)
+}
+fn git_commit_of(dir: &Path, sha: &str) -> Result<Value, String> {
+    let out = git(dir, &["show", "--numstat", "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%H%x1f%an%x1f%ae%x1f%ad%x1f%B%x1e", hexish(sha)?])?;
     let (head, stat) = out.split_once('\u{1e}').unwrap_or((&out, ""));
     let f: Vec<&str> = head.split('\u{1f}').collect();
     let files: Vec<Value> = stat.lines().filter(|l| !l.trim().is_empty()).map(|l| { let mut it = l.split('\t'); json!({ "add": it.next().unwrap_or("-"), "del": it.next().unwrap_or("-"), "path": it.next().unwrap_or("") }) }).collect();
@@ -1275,12 +1281,14 @@ fn git_commit(repo: String, sha: String, cur: State<Cur>, window: tauri::Webview
 #[tauri::command(async)]
 fn git_diff(repo: String, kind: String, path: String, sha: Option<String>, cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, String> {
     let p = project(&cur, &window)?;
-    let dir = repo_dir(&p, &repo)?;
-    let file = inside(&path)?;
-    let text = match kind.as_str() {
+    git_diff_of(&repo_dir(&p, &repo)?, &kind, &path, sha.as_deref())
+}
+fn git_diff_of(dir: &Path, kind: &str, path: &str, sha: Option<&str>) -> Result<Value, String> {
+    let file = inside(path)?;
+    let text = match kind {
         "work" => git(&dir, &["diff", "HEAD", "--", file]).or_else(|_| git(&dir, &["diff", "--", file]))?,
         "staged" => git(&dir, &["diff", "--cached", "--", file])?,
-        "commit" => git(&dir, &["show", "--pretty=format:", hexish(sha.as_deref().unwrap_or(""))?, "--", file])?,
+        "commit" => git(dir, &["show", "--pretty=format:", hexish(sha.unwrap_or(""))?, "--", file])?,
         "new" => { let raw = fs::read(dir.join(file)).map_err(|e| e.to_string())?; if raw.iter().take(8000).any(|b| *b == 0) { "Binary file".to_string() } else { String::from_utf8_lossy(&raw).lines().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n") } }
         _ => return Err("unknown kind of diff".into()),
     };
@@ -1899,10 +1907,12 @@ fn toggle(app: &tauri::AppHandle) {
 // viewer of the same tmux session: only sessions that outlive the app can be reached, and nothing here can read or change a
 // project's files.
 const REMOTE_PAGE: &str = include_str!("../../ui/remote.html");
-const REMOTE_FILES: [(&str, &str, &str); 3] = [
+const REMOTE_FILES: [(&str, &str, &str); 4] = [
     ("/xterm.js", "text/javascript; charset=utf-8", include_str!("../../ui/vendor/xterm.js")),
     ("/addon-fit.js", "text/javascript; charset=utf-8", include_str!("../../ui/vendor/addon-fit.js")),
     ("/xterm.css", "text/css; charset=utf-8", include_str!("../../ui/vendor/xterm.css")),
+    // reads the pairing code through the phone's camera; asked for only when a code is scanned
+    ("/jsqr.js", "text/javascript; charset=utf-8", include_str!("../../ui/vendor/jsqr.js")),
 ];
 const REMOTE_ICON: &[u8] = include_bytes!("../icons/icon.png");
 const REMOTE_SW: &str = include_str!("../../ui/remote-sw.js");
@@ -2560,6 +2570,52 @@ fn remote_chat(name: &str, after: &str) -> Value {
     let items: Vec<Value> = all.iter().skip(from.unwrap_or(all.len().saturating_sub(60))).map(|(id, role, text)| json!({ "id": id, "role": role, "text": text })).collect();
     json!({ "op": "chat", "name": name, "found": true, "reset": from.is_none(), "items": items })
 }
+// ---- The repos of the projects, for a paired page: where each stands, what has changed in it, its last commits, and a diff.
+// The same git the Git screen asks, read only: nothing is staged, committed or pushed from a remote page.
+/// Every repo of every project with its branch, how far it is from its upstream and how many files have changed. Asked of
+/// all of them at once, and kept for a few seconds: a page asks again and again while it shows the list.
+fn remote_repos() -> Value {
+    static KEPT: Mutex<Option<(std::time::Instant, Value)>> = Mutex::new(None);
+    if let Some((at, v)) = KEPT.lock().ok().and_then(|k| k.clone()) { if at.elapsed() < std::time::Duration::from_secs(6) { return v; } }
+    let n = config()["projects"].as_array().map(|a| a.len()).unwrap_or(0);
+    let asked: Vec<std::thread::JoinHandle<Vec<Value>>> = (0..n).map(|i| std::thread::spawn(move || {
+        let Ok(p) = project_at(i) else { return vec![] };
+        repo_list(&p).into_iter().filter_map(|(repo, dir)| {
+            let out = git(&dir, &["status", "--porcelain=v2", "--branch", "--untracked-files=normal"]).ok()?;
+            let (mut branch, mut ahead, mut behind, mut changed) = (String::new(), 0i64, 0i64, 0usize);
+            for ln in out.lines() {
+                if let Some(v) = ln.strip_prefix("# branch.head ") { branch = v.to_string(); }
+                else if let Some(v) = ln.strip_prefix("# branch.ab ") { let mut it = v.split(' '); ahead = it.next().unwrap_or("+0").trim_start_matches('+').parse().unwrap_or(0); behind = it.next().unwrap_or("-0").trim_start_matches('-').parse().unwrap_or(0); }
+                else if !ln.starts_with('#') && !ln.trim().is_empty() { changed += 1; }
+            }
+            let folder = dir.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            Some(json!({ "proj": i, "project": p.name, "repo": repo, "folder": folder, "branch": branch, "ahead": ahead, "behind": behind, "changed": changed }))
+        }).collect()
+    })).collect();
+    let items: Vec<Value> = asked.into_iter().flat_map(|t| t.join().unwrap_or_default()).collect();
+    let v = json!({ "op": "repos", "items": items });
+    if let Ok(mut k) = KEPT.lock() { *k = Some((std::time::Instant::now(), v.clone())); }
+    v
+}
+/// One thing asked about one repo: `repo` (its changed files and last commits), `commit` (the files of one), `diff`.
+fn remote_git(m: &Value) -> Value {
+    let s = |k: &str| m[k].as_str().unwrap_or("");
+    let (op, repo) = (s("op"), s("repo"));
+    let answer = (|| -> Result<Value, String> {
+        let i = m["proj"].as_u64().map(|i| i as usize).filter(|i| *i < config()["projects"].as_array().map(|a| a.len()).unwrap_or(0)).ok_or("that project is not in the list")?;
+        let dir = repo_dir(&project_at(i)?, repo)?;
+        match op {
+            "repo" => Ok(json!({ "status": git_status_of(&dir, repo)?, "log": git_log_of(&dir, 0, 25).unwrap_or(json!([])) })),
+            "commit" => Ok(json!({ "commit": git_commit_of(&dir, s("sha"))? })),
+            "diff" => Ok(json!({ "diff": git_diff_of(&dir, s("kind"), s("path"), m["sha"].as_str())?, "kind": s("kind"), "path": s("path"), "sha": s("sha") })),
+            _ => Err("not something a repo is asked".into()),
+        }
+    })();
+    match answer {
+        Ok(mut v) => { v["op"] = json!(op); v["proj"] = m["proj"].clone(); v["repo"] = json!(repo); v }
+        Err(e) => json!({ "op": "giterr", "what": op, "proj": m["proj"], "repo": repo, "text": e }),
+    }
+}
 // ---- A session's browser, watched from a paired page. A program in a session (Playwright, for Claude Code) drives a Chrome;
 // started with --remote-debugging-port, that Chrome takes a second connection on a port of this computer only, and over it
 // sends a picture of the page each time the page changes. Those pictures are passed on to the one page that asked, at the
@@ -2705,6 +2761,14 @@ fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, ter
             *held = Some(w.clone());
             let (tx, width) = (tx.clone(), m["width"].as_u64().unwrap_or(1200).clamp(320, 2000) as u32);
             std::thread::spawn(move || browser_watch(width, w, tx));
+        }
+        "repos" => {
+            let tx = tx.clone();
+            std::thread::spawn(move || { let _ = tx.send(remote_repos().to_string()); });
+        }
+        "repo" | "commit" | "diff" => {
+            let (tx, m) = (tx.clone(), m.clone());
+            std::thread::spawn(move || { let _ = tx.send(remote_git(&m).to_string()); });
         }
         "seen" => {
             if let Some(w) = watching.lock().ok().and_then(|h| h.clone()) { w.seen.fetch_max(m["n"].as_u64().unwrap_or(0), std::sync::atomic::Ordering::Relaxed); }

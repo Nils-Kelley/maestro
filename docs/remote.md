@@ -13,6 +13,10 @@ as a full terminal. It is off unless you turn it on.
    pairs one device and works for ten minutes; make another for the next device.
 4. On a phone, add the page to the home screen. It then opens like an app.
 
+A page that is not paired (the one on the home screen, after its device was removed) has **Scan the code**: on the computer
+type `>` and choose **Pair a phone**, and point the phone at the code. At the secure address the page uses the camera itself;
+at the plain one it asks for a photo of the code.
+
 Maestro has to be running on the computer; hidden in the tray is fine. On Windows the first start may ask whether Maestro may
 accept connections: allow it for **private** networks, which is how Windows classes the Tailscale adapter. If a device then
 cannot connect, look for another firewall or security product on the computer that filters incoming connections.
@@ -28,6 +32,9 @@ cannot connect, look for another firewall or security product on the computer th
   a message line that uses the phone's own keyboard, dictation included. A message of several lines goes in as one paste. A
   finger moved over the terminal scrolls it. The `···` button sets the text size and ends the session.
 - **Start a session**: Claude Code with a first message, or a shell, in any project that keeps its sessions running.
+- **Look at the projects.** Projects lists every repo with its branch, how many files have changed and which sessions are at
+  work in it. A repo opens to its changed files and last commits, and a file to its diff, which follows the file as a session
+  edits it. Nothing is staged, committed or pushed from here.
 - **Watch a session's browser.** When a session drives a browser (Claude Code through the Playwright tool, say), the session
   has a third view, Browser: a picture of the page it is on, sent again each time the page changes. Pinch or double-tap to
   enlarge it; when the browser has several pages open, choose which to look at. It only shows: nothing is tapped or typed

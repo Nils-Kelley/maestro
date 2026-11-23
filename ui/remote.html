@@ -160,6 +160,32 @@ textarea::placeholder, input::placeholder { color: var(--three); }
 #toast.on { transform: translate(-50%, 0); } #toast.bad { color: #ffb4b2; } #toast.warn { color: #f3cf8c; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---- the projects: where each repo stands, what changed, the commits, a diff ---- */
+.htabs { flex: none; margin: 6px calc(var(--pad) + var(--sr)) 2px calc(var(--pad) + var(--sl)); }
+#gitv { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; background: var(--bg); transform: translateX(100%); visibility: hidden; transition: transform 0.32s var(--ease), visibility 0s 0.32s; }
+body.gitting #gitv { transform: none; visibility: visible; transition: transform 0.32s var(--ease), visibility 0s; }
+body.gitting #home { transform: translateX(-25%); }
+#gitv .vhead { flex-wrap: nowrap; }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 6px; background: var(--raised); color: var(--two); font: 12.5px var(--mono); vertical-align: 1px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .meta .chip { margin-right: 6px; vertical-align: middle; } .plus { color: var(--ok); } .minus { color: var(--bad); } .ahead { color: var(--accent); }
+.gline { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px calc(var(--pad) + var(--sr)) 8px calc(var(--pad) + var(--sl)); border-bottom: 1px solid var(--line); } button.gline:active { background: var(--group); }
+.gline .st { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; font: 600 12.5px var(--mono); background: rgba(229, 169, 58, 0.16); color: var(--warn); } .gline .st.A { background: rgba(79, 191, 122, 0.16); color: var(--ok); } .gline .st.D, .gline .st.U { background: rgba(239, 100, 97, 0.16); color: var(--bad); } .gline .st.R { background: rgba(108, 184, 246, 0.16); color: var(--accent); }
+.gline .p { flex: 1; min-width: 0; } .gline .p b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .gline .p span { display: block; color: var(--three); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gline .p b.two { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.gline .c { flex: none; font: 12.5px var(--mono); text-align: right; } .gline .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--three); } .gline .dot.working { background: var(--accent); } .gline .dot.needs { background: var(--warn); }
+.gnote { color: var(--three); text-align: center; font-size: 15px; padding: 44px 30px; line-height: 1.45; } .gmsg { padding: 14px calc(var(--pad) + var(--sr)) 4px calc(var(--pad) + var(--sl)); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; } .gmsg small { display: block; margin-top: 6px; color: var(--three); font-size: 13.5px; }
+.diff { font: 12px/1.55 var(--mono); padding: 4px 0 20px; } .diff .in { display: block; }
+.diff .h { padding: 5px calc(var(--pad) + var(--sr)) 5px calc(var(--pad) + var(--sl)); margin-top: 10px; background: var(--group); color: var(--three); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.diff .l { display: flex; } .diff .l i { flex: none; width: 5.5ch; padding-right: 1.2ch; text-align: right; font-style: normal; color: var(--three); opacity: 0.7; -webkit-user-select: none; user-select: none; } .diff .l span { flex: 1; min-width: 0; padding-right: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff .l.a { background: rgba(79, 191, 122, 0.14); } .diff .l.a span { color: #c3f1d3; } .diff .l.d { background: rgba(239, 100, 97, 0.14); } .diff .l.d span { color: #ffd0ce; }
+.diff.nowrap { overflow-x: auto; overscroll-behavior-x: contain; } .diff.nowrap .in { display: inline-block; min-width: 100%; } .diff.nowrap .l span { white-space: pre; overflow-wrap: normal; } .diff.nowrap .h { overflow: visible; }
+#gwrap[aria-pressed=false] { color: var(--three); }
+/* ---- the pairing code, read through the camera ---- */
+#pair .or { margin: 18px 0 8px; color: var(--three); font-size: 14px; text-align: center; } #pair .cta.quiet { background: var(--raised); color: var(--fg); }
+#scan { position: fixed; inset: 0; z-index: 40; background: #000; display: grid; } #scan video { width: 100%; height: 100%; object-fit: cover; grid-area: 1 / 1; }
+#scan .aim { grid-area: 1 / 1; place-self: center; width: min(68vw, 300px); aspect-ratio: 1; border-radius: 22px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.5); border: 2px solid rgba(255, 255, 255, 0.9); }
+#scan p { grid-area: 1 / 1; align-self: end; justify-self: center; margin: 0 24px calc(96px + var(--sb)); color: #fff; text-align: center; text-shadow: 0 1px 6px #000; } #scan button { grid-area: 1 / 1; align-self: end; justify-self: center; margin-bottom: calc(28px + var(--sb)); min-width: 140px; min-height: 48px; border-radius: 24px; background: rgba(255, 255, 255, 0.18); color: #fff; font-weight: 600; text-align: center; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+
 /* a wide screen shows both, and has a keyboard of its own */
 @media (min-width: 900px) {
   #home { right: auto; width: 380px; border-right: 1px solid var(--line); transition: none; }
@@ -167,6 +193,7 @@ textarea::placeholder, input::placeholder { color: var(--three); }
   body.viewing #home { transform: none; }
   body:not(.viewing) #view > :not(.blank) { display: none; } body:not(.viewing) .blank { display: grid; }
   #back { display: none; } .vhead { padding-left: 18px; }
+  #gitv { left: 380px; transition: none; transform: none; } body.gitting #home { transform: none; } #gitv .vhead { padding-left: 4px; }
   .sheet { left: 50%; right: auto; width: 460px; margin-left: -230px; bottom: 8vh; border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); } .grab { visibility: hidden; }
   .nav h1 { font-size: 26px; }
 }
@@ -178,23 +205,38 @@ textarea::placeholder, input::placeholder { color: var(--three); }
 
 <section id="pair" hidden>
   <h1>Pair this device</h1>
-  <p>On the computer, open Maestro, type <b>&gt;</b>, choose Remote access, then Pair a device. Scan the code it shows, or paste its link here. A code works once, for ten minutes.</p>
+  <p>On the computer, open Maestro, type <b>&gt;</b> and choose <b>Pair a phone</b>. Scan the code it shows. A code works once, for ten minutes.</p>
+  <button class="cta" type="button" id="scanbtn">Scan the code</button>
+  <p class="or">or paste its link</p>
   <form id="pairform">
     <input type="text" id="pairin" placeholder="Link or pairing code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Link or pairing code">
-    <button class="cta" type="submit">Pair</button>
+    <button class="cta quiet" type="submit">Pair</button>
   </form>
+  <input type="file" id="pairshot" accept="image/*" capture="environment" hidden>
 </section>
+<div id="scan" hidden><video playsinline muted></video><i class="aim"></i><p>Point the camera at the code on the computer</p><button type="button" id="scanstop">Cancel</button></div>
 
 <div id="app" hidden>
   <main id="home">
     <header class="nav">
-      <div class="grow"><h1>Sessions</h1><p class="host" id="host"></p></div>
+      <div class="grow"><h1 id="htitle">Sessions</h1><p class="host" id="host"></p></div>
       <button class="tool" type="button" id="prefs" aria-label="This device"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18.5" cy="12" r="1.6" fill="currentColor"/></svg></button>
       <button class="tool" type="button" id="add" aria-label="New session"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
     </header>
     <p class="offline" id="offline" hidden></p>
-    <div class="scroll"><div id="rows"></div></div>
+    <div class="seg htabs" id="htabs" role="group" aria-label="What to show"><button type="button" data-home="sessions" aria-pressed="true">Sessions</button><button type="button" data-home="projects" aria-pressed="false">Projects</button></div>
+    <div class="scroll" id="sessbox"><div id="rows"></div></div>
+    <div class="scroll" id="repobox" hidden><div id="repos"></div></div>
   </main>
+
+  <section id="gitv" aria-label="A project's changes">
+    <div class="vhead">
+      <button class="tool" type="button" id="gback" aria-label="Back"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <span class="tt"><span class="t" id="gtitle"></span><span class="n" id="gsub"></span></span>
+      <button class="tool" type="button" id="gwrap" aria-label="Wrap long lines" aria-pressed="true" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h13a3 3 0 010 6h-4m0 0l2.5-2.5M13 18l2.5 2.5M4 18h5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <div class="scroll" id="gbody"></div>
+  </section>
 
   <section id="view" aria-label="Session">
     <div class="vhead">
@@ -309,9 +351,11 @@ function connect() {
 function heard(m) {
   if (m.op === 'hello') { if (m.token) { S.token = m.token; store.set('maestro-token', m.token); } S.pair = ''; S.vapid = m.vapid || ''; S.up = true; S.tries = 0; link('on'); $('#host').textContent = m.host || ''; send({ op: 'list' }); if (S.cur) resume(); return; }
   if (m.op === 'denied') { const paired = !!S.token && !S.pair; S.token = ''; S.pair = ''; store.set('maestro-token', null); S.ws.close(); return showPair(paired ? 'This device is no longer paired with the computer.' : 'That code has been used or has run out. Make a new one on the computer.'); }
-  if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.loaded = true; drawRows(); webOffer(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
+  if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.loaded = true; drawRows(); webOffer(); if (G.tab === 'projects') drawRepos(); if (G.cur && gitTop().k === 'repo') drawGit(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
   if (m.op === 'chat') return heardChat(m);
   if (m.op === 'browser' || m.op === 'frame') return heardWeb(m);
+  if (m.op === 'repos') { G.repos = m.items || []; G.loaded = true; return drawRepos(); }
+  if (m.op === 'repo' || m.op === 'commit' || m.op === 'diff' || m.op === 'giterr') return heardGit(m);
   if (m.op === 'out') { const c = S.cur; if (c && c.id === m.id && c.term) c.term.write(m.data, c.starting ? () => { if (S.cur === c && c.term && shows(c.term)) { starting(null); toChat(c); } } : undefined); return; }
   if (m.op === 'opened') { if (S.cur && S.cur.id === m.id) { S.cur.name = m.name; drawRows(); toChat(S.cur); } send({ op: 'list' }); return; }
   if (m.op === 'exit') { if (S.cur && S.cur.id === m.id) { say('That session has ended'); closeView(); } send({ op: 'list' }); return; }
@@ -570,6 +614,117 @@ function zoomWeb(z, x, y) {
   for (const g of ['gesturestart', 'gesturechange']) v.addEventListener(g, (e) => e.preventDefault());
 }
 
+// ---- the projects: every repo with what has changed in it, its commits and their diffs. Looked at, not acted on. ----
+const G = { tab: 'sessions', repos: [], loaded: false, cur: null, stack: [], wrap: store.get('maestro-wrap') !== '0' };
+const gitTop = () => G.stack[G.stack.length - 1] || {};
+const sessionsIn = (folder) => S.sessions.filter((x) => x.project === folder).map((x) => ({ s: x, ...stateOf(x) }));
+function homeTab(tab) {
+  G.tab = tab; document.querySelectorAll('#htabs [data-home]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.home === tab)));
+  $('#sessbox').hidden = tab !== 'sessions'; $('#repobox').hidden = tab !== 'projects'; $('#htitle').textContent = tab === 'projects' ? 'Projects' : 'Sessions';
+  if (tab === 'projects') { drawRepos(); send({ op: 'repos' }); }
+}
+function drawRepos() {
+  const el = $('#repos'); if (!G.loaded) { el.innerHTML = '<div class="gnote">Looking at the repos…</div>'; return; }
+  const all = G.repos.map((r) => { const ss = sessionsIn(r.folder); return { r, ss, busy: ss.filter((x) => x.st !== 'idle').length }; }).sort((a, b) => b.busy - a.busy || (b.r.changed ? 1 : 0) - (a.r.changed ? 1 : 0) || b.ss.length - a.ss.length || a.r.project.localeCompare(b.r.project));
+  const row = ({ r, ss }) => { const doing = ss.find((x) => x.st === 'working'); const asks = ss.find((x) => x.st === 'needs');
+    const bits = [r.changed ? `${r.changed} changed` : 'no changes', r.ahead ? `<span class="ahead">↑${r.ahead}</span>` : '', r.behind ? `↓${r.behind}` : '', ss.length ? `${ss.length} session${ss.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    return `<article class="row${asks ? ' needs' : ''}" data-repo="${r.proj}|${esc(r.repo)}"><button class="open" type="button"><span class="t">${esc(r.repo === r.project ? r.project : `${r.project} / ${r.repo}`)}</span><span class="meta"><span class="chip">${esc(r.branch || 'no branch')}</span>${bits}</span>${asks ? '<span class="now"><span>A session is waiting for you</span></span>' : doing ? `<span class="now"><i class="spin"></i><span>${esc(doing.pk.busy ? doing.pk.now : 'Working')}</span></span>` : ''}</button></article>`; };
+  const live = all.filter((x) => x.r.changed || x.ss.length); const quiet = all.filter((x) => !x.r.changed && !x.ss.length);
+  const html = (live.length ? `<div class="sect"><span>Changes and sessions</span><i>${live.length}</i></div>${live.map(row).join('')}` : '') + (quiet.length ? `<div class="sect"><span>Nothing changed</span><i>${quiet.length}</i></div>${quiet.map(row).join('')}` : '') || '<div class="gnote">No project here is a git repo.</div>';
+  if (el.dataset.sig !== html) { el.dataset.sig = html; el.innerHTML = html; }
+}
+function openRepo(r) { G.cur = r; G.stack = [{ k: 'repo' }]; document.body.classList.add('gitting'); drawGit(true); $('#gbody').scrollTop = 0; gitAsk(); }
+function closeGit() { G.cur = null; G.stack = []; document.body.classList.remove('gitting'); if (G.tab === 'projects') send({ op: 'repos' }); }
+function gitPush(f) { gitTop().at = $('#gbody').scrollTop; G.stack.push(f); drawGit(true); $('#gbody').scrollTop = 0; gitAsk(); }
+function gitBack() { if (G.stack.length <= 1) return closeGit(); G.stack.pop(); drawGit(true); $('#gbody').scrollTop = gitTop().at || 0; gitAsk(); }
+function gitAsk() { const r = G.cur; const f = gitTop(); if (!r || !f.k || (f.k === 'commit' && f.data)) return; send({ op: f.k, proj: r.proj, repo: r.repo, sha: f.sha || '', kind: f.kind || '', path: f.path || '' }); }
+function heardGit(m) {
+  const r = G.cur; const f = gitTop(); if (!r || m.proj !== r.proj || m.repo !== r.repo) return;
+  if (m.op === 'giterr') { if (m.what === f.k && !f.data) { f.err = m.text || 'That did not work'; drawGit(true); } return; }
+  if (m.op !== f.k || (m.op === 'diff' && (m.path !== f.path || m.kind !== f.kind)) || (m.op === 'commit' && m.commit.sha.indexOf(f.sha) !== 0 && f.sha.indexOf(m.commit.sha) !== 0)) return;
+  const data = m.op === 'repo' ? { status: m.status, log: m.log } : m.op === 'commit' ? m.commit : m.diff; const sig = JSON.stringify(data);
+  if (f.sig === sig) return; f.sig = sig; f.data = data; f.err = ''; drawGit();
+}
+const fileLine = (f, kind, sha) => { const st = f.work === '?' ? 'A' : (f.work && f.work !== '.' ? f.work : f.staged) || 'M'; const at = f.path.lastIndexOf('/'); const n = (v) => v == null || v === '-' ? '' : v;
+  return `<button class="gline" type="button" data-gfile="${esc(f.path)}" data-kind="${kind || (f.work === '?' ? 'new' : 'work')}" data-sha="${esc(sha || '')}"><span class="st ${esc(st)}">${esc(st === '.' ? 'M' : st)}</span><span class="p"><b>${esc(f.path.slice(at + 1))}</b>${at > 0 ? `<span>${esc(f.path.slice(0, at))}</span>` : ''}</span><span class="c">${Number(f.add) ? `<span class="plus">+${f.add}</span> ` : ''}${Number(f.del) ? `<span class="minus">−${f.del}</span>` : ''}</span></button>`; };
+// a diff as lines: what was added and taken away, with the number each line has in the file
+function diffHtml(text) {
+  const out = []; let a = 1, b = 1, n = 0; const lines = String(text || '').split('\n');
+  for (const l of lines) {
+    if (++n > 4000) { out.push(`<div class="h">… ${lines.length - 4000} more lines are not shown</div>`); break; }
+    if (/^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(l)) continue;
+    const h = l.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/);
+    if (h) { a = Number(h[1]); b = Number(h[2]); out.push(`<div class="h">${esc(h[3].trim() || `line ${b}`)}</div>`); continue; }
+    if (l[0] === '+') out.push(`<div class="l a"><i>${b++ || ''}</i><span>${esc(l.slice(1)) || ' '}</span></div>`);
+    else if (l[0] === '-') out.push(`<div class="l d"><i>${a++ || ''}</i><span>${esc(l.slice(1)) || ' '}</span></div>`);
+    else if (l[0] === '\\') continue;
+    else if (l || n < lines.length) { out.push(`<div class="l"><i>${b || ''}</i><span>${esc(l.slice(1)) || ' '}</span></div>`); a++; b++; }
+  }
+  return out.join('');
+}
+function drawGit(fresh) {
+  const r = G.cur; const f = gitTop(); if (!r || !f.k) return; const el = $('#gbody'); const keep = el.scrollTop; const d = f.data;
+  $('#gwrap').hidden = f.k !== 'diff'; $('#gwrap').setAttribute('aria-pressed', String(G.wrap));
+  const wait = f.err ? `<div class="gnote">${esc(f.err)}</div>` : '<div class="gnote">Reading…</div>'; let html = '';
+  if (f.k === 'repo') {
+    const s = d && d.status; $('#gtitle').textContent = r.repo === r.project ? r.project : `${r.project} / ${r.repo}`;
+    $('#gsub').textContent = s ? [s.branch, s.ahead ? `${s.ahead} to push` : '', s.behind ? `${s.behind} behind` : '', !s.upstream ? 'not on a remote' : ''].filter(Boolean).join(' · ') : r.branch;
+    const ss = sessionsIn(r.folder);
+    if (ss.length) html += `<div class="sect"><span>Sessions here</span><i>${ss.length}</i></div>${ss.map((x) => `<button class="gline" type="button" data-gsess="${esc(x.s.name)}"><i class="dot ${x.st}"></i><span class="p"><b>${esc(unnamed(x.s) ? KIND[x.s.kind] || 'Shell' : x.s.label)}</b><span>${esc(x.st === 'needs' ? 'Waiting for you' : x.st === 'working' ? (x.pk.busy ? x.pk.now : 'Working') : 'Idle')}</span></span></button>`).join('')}`;
+    if (!d) html += wait; else {
+      const add = s.files.reduce((n, x) => n + (Number(x.add) || 0), 0); const del = s.files.reduce((n, x) => n + (Number(x.del) || 0), 0);
+      html += `<div class="sect"><span>Changes</span><i>${s.total}${s.total ? ` · <span class="plus">+${add}</span> <span class="minus">−${del}</span>` : ''}</i></div>${s.files.map((x) => fileLine(x)).join('') || '<div class="gnote" style="padding:22px 30px">Nothing has changed since the last commit.</div>'}${s.total > s.files.length ? `<div class="gnote" style="padding:14px 30px">${s.total - s.files.length} more are not listed.</div>` : ''}`;
+      html += `<div class="sect"><span>Commits</span></div>${(d.log || []).map((c) => `<button class="gline" type="button" data-gsha="${esc(c.sha)}" data-subject="${esc(c.subject)}"><span class="p"><b class="two">${esc(c.subject)}</b><span>${esc(c.who)} · ${esc(c.ago)}${c.unpushed ? ' · <span class="ahead">not pushed</span>' : ''}</span></span></button>`).join('') || '<div class="gnote" style="padding:22px 30px">No commits yet.</div>'}`;
+    }
+  } else if (f.k === 'commit') {
+    $('#gtitle').textContent = f.subject || f.sha.slice(0, 8); $('#gsub').textContent = `${f.sha.slice(0, 8)}${d ? ` · ${d.who} · ${d.at}` : ''}`;
+    html = d ? `<div class="gmsg">${esc(d.message)}</div><div class="sect"><span>Files</span><i>${d.files.length}</i></div>${d.files.map((x) => fileLine({ path: x.path, staged: 'M', work: '.', add: x.add, del: x.del }, 'commit', f.sha)).join('')}` : wait;
+  } else {
+    const at = f.path.lastIndexOf('/'); $('#gtitle').textContent = f.path.slice(at + 1); $('#gsub').textContent = [at > 0 ? f.path.slice(0, at) : '', f.kind === 'commit' ? f.sha.slice(0, 8) : f.kind === 'new' ? 'new file' : 'not committed'].filter(Boolean).join(' · ');
+    html = d ? (d.text.trim() ? `<div class="diff${G.wrap ? '' : ' nowrap'}"><div class="in">${diffHtml(d.text)}</div></div>${d.cut ? '<div class="gnote">The rest of this diff is too long to show here.</div>' : ''}` : '<div class="gnote">No difference in the text of this file (it may be a binary file, or only its mode changed).</div>') : wait;
+  }
+  el.innerHTML = html; if (!fresh) el.scrollTop = keep;
+}
+// while a repo or a diff is on the screen it is asked again: the files change as the sessions work
+setInterval(() => { if (!S.up || document.visibilityState !== 'visible') return; if (G.cur) gitAsk(); else if (G.tab === 'projects') send({ op: 'repos' }); }, 6000);
+
+// ---- pairing by pointing the camera at the code: live where the page may use the camera (a secure address), else from a photo ----
+let scanning = null;
+const lib = (src) => new Promise((ok, no) => { if (window.jsQR) return ok(); const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = () => no(new Error('the part of the page that reads codes did not load')); document.head.appendChild(el); });
+async function codeReader() {
+  if ('BarcodeDetector' in window) { try { const d = new BarcodeDetector({ formats: ['qr_code'] }); return async (c) => { const r = await d.detect(c); return r[0] ? r[0].rawValue : ''; }; } catch (_) {} }
+  await lib('jsqr.js'); return async (c) => { const x = c.getContext('2d', { willReadFrequently: true }); const im = x.getImageData(0, 0, c.width, c.height); const r = jsQR(im.data, im.width, im.height); return r ? r.data : ''; };
+}
+// what a code says: a link to this page with the code after #. One made for another address of this computer (its secure one) is opened there.
+function scanned(text) {
+  const m = String(text || '').match(/#([0-9a-f]{32})\s*$/i) || String(text || '').match(/^\s*([0-9a-f]{32})\s*$/i); if (!m) return false;
+  scanStop(); buzz(30); let u = null; try { u = new URL(String(text).trim()); } catch (_) {}
+  if (u && /^https?:$/.test(u.protocol) && u.origin !== location.origin) { location.href = u.href; return true; }
+  S.pair = m[1].toLowerCase(); S.tries = 0; connect(); return true;
+}
+async function scan() {
+  if (!(isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return $('#pairshot').click();
+  let stream; try { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } } }); } catch (_) { return $('#pairshot').click(); }
+  const v = $('#scan video'); v.srcObject = stream; $('#scan').hidden = false; scanning = { stream }; try { await v.play(); } catch (_) {}
+  let read; try { read = await codeReader(); } catch (e) { scanStop(); return say(String(e.message || e), 'bad'); }
+  const c = document.createElement('canvas'); const mine = scanning;
+  const look = async () => {
+    if (scanning !== mine) return;
+    if (v.videoWidth) { const k = Math.min(1, 720 / v.videoWidth); c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k); c.getContext('2d', { willReadFrequently: true }).drawImage(v, 0, 0, c.width, c.height); let t = ''; try { t = await read(c); } catch (_) {} if (t && scanned(t)) return; }
+    setTimeout(look, 140);
+  };
+  look();
+}
+function scanStop() { if (!scanning) return; scanning.stream.getTracks().forEach((t) => t.stop()); scanning = null; $('#scan video').srcObject = null; $('#scan').hidden = true; }
+$('#pairshot').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0]; e.target.value = ''; if (!file) return; say('Reading the code…');
+  try {
+    const read = await codeReader(); const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('that picture could not be opened')); const fr = new FileReader(); fr.onload = () => { i.src = fr.result; }; fr.onerror = () => no(new Error('that picture could not be read')); fr.readAsDataURL(file); });
+    for (const side of [1400, 800, 2200]) { const k = Math.min(1, side / Math.max(img.naturalWidth, img.naturalHeight)); const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k); c.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0, c.width, c.height); const t = await read(c); if (t && scanned(t)) return; }
+    say('No pairing code was found in that picture. Fill the frame with the code and try again.', 'bad');
+  } catch (err) { say(String(err.message || err), 'bad'); }
+});
+
 let endTimer = 0;
 function armEnd(on) { const b = $('#mend'); clearTimeout(endTimer); b.dataset.sure = on ? '1' : ''; b.textContent = on ? 'Tap again to end it' : 'End session'; if (on) endTimer = setTimeout(() => armEnd(false), 4000); }
 // the round button: send what is typed; with nothing typed, stop a working conversation, or press Enter in a terminal
@@ -634,6 +789,15 @@ document.addEventListener('click', (e) => {
   if (t.closest('[data-wpage]')) { const c = S.cur; if (c && c.mode === 'web') { c.wpick = t.closest('[data-wpage]').dataset.wpage; send({ op: 'browser', name: c.name, page: c.wpick }); drawWeb(); } return; }
   if (t.closest('#add')) { $('#nfind').value = ''; drawNew(); return sheet('#sheet-new'); }
   if (t.closest('#prefs')) { drawPrefs(); return sheet('#sheet-prefs'); }
+  if (t.closest('[data-home]')) return homeTab(t.closest('[data-home]').dataset.home);
+  if (t.closest('#scanbtn')) return scan();
+  if (t.closest('#scanstop')) return scanStop();
+  if (t.closest('#gback')) return gitBack();
+  if (t.closest('#gwrap')) { G.wrap = !G.wrap; store.set('maestro-wrap', G.wrap ? null : '0'); return drawGit(true); }
+  if (t.closest('[data-repo]')) { const r = G.repos.find((x) => `${x.proj}|${x.repo}` === t.closest('[data-repo]').dataset.repo); if (r) openRepo(r); return; }
+  if (t.closest('[data-gsess]')) { const who = listed(t.closest('[data-gsess]').dataset.gsess); if (who) { closeGit(); openView(who); } return; }
+  if (t.closest('[data-gfile]')) { const b = t.closest('[data-gfile]'); return gitPush({ k: 'diff', kind: b.dataset.kind, path: b.dataset.gfile, sha: b.dataset.sha || '' }); }
+  if (t.closest('[data-gsha]')) { const b = t.closest('[data-gsha]'); return gitPush({ k: 'commit', sha: b.dataset.gsha, subject: b.dataset.subject || '' }); }
   if (t.closest('#pushbtn')) return pushToggle();
   if (t.closest('#unpair')) { const b = $('#unpair'); if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Tap again to unpair'; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Unpair this device'; }, 4000); return; } S.token = ''; store.set('maestro-token', null); sheet(null); if (S.ws) S.ws.close(); return showPair(); }
   if (t.closest('[data-proj]')) { S.proj = t.closest('[data-proj]').dataset.proj; const f = $('#nfind'); f.value = ''; f.blur(); return drawNew(); }

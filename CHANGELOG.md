@@ -20,6 +20,9 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
   with a message line. A session started from the page says that it is starting, then opens as its conversation; the project
   it will start in is named on the sheet, and a session nobody named is called after its project.
 - A session started from a paired device gets a tab in the window too, without restarting Maestro.
+- Remote access has a Projects list: every repo with its branch, what has changed in it and the sessions at work there, its
+  commits, and diffs to read on a phone. Read only.
+- A page that is not paired scans the pairing code itself, and `> Pair a phone` shows one.
 - Console tabs can be put in any order: drag a tab to another slot, or press `Ctrl+Shift+PageUp` / `PageDown` to move the
   session you are in. The tiles and the `Alt+1`…`9` numbers follow, and sessions that outlive the app come back in that order.
 

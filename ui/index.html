@@ -844,6 +844,7 @@ function actions() {
   PROJ.names.forEach((n, i) => { if (i !== PROJ.current) add(`Open ${n}`, 'Switch project', () => setProject(i)); });
   add('Add or remove a project', 'The list of folders this app opens', () => { FOUND = null; setTab('projects'); });
   add('Check for updates', `This is Maestro ${UPD.current || ''}. Asks GitHub whether a newer release is out`, () => { UPD.checked = false; setTab('update'); });
+  add('Pair a phone', 'Show a code to scan with the phone’s camera: it works once, for ten minutes', () => { setTab('remote'); invoke('remote_pair').then((r) => { remotePill(r); if (tab === 'remote') drawRemote(r); }).catch((e) => say(String(e), 'bad')); });
   add('Remote access', 'Reach your sessions from your phone or another computer, over your own private network', () => setTab('remote'));
   add('Set up a starter harness', 'Instructions, rules, a work log and three skills, written only where they are missing', () => { PLAN = null; setTab('setup'); });
   if (D.project.kit) add('Run the probe audit', 'About twenty seconds; shows which passes still count', () => { setTab('checks'); const b = $('[data-audit]'); if (b) b.click(); });
