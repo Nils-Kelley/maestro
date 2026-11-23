@@ -40,10 +40,29 @@ question, the answers are buttons on the card. Tile 1, 2, 4 or 6 sessions, or gi
 With `tmux` installed, sessions keep running when Maestro closes and come back with their scroll-back. On Windows that
 means sessions inside WSL; PowerShell and native Windows sessions end with the app.
 
-Away from the computer, [remote access](docs/remote.md) puts the same cards and terminals on your phone or another
-computer, over your own Tailscale network. It is off until you turn it on.
+Away from the computer, [remote access](#remote-access) puts your sessions on your phone.
 
 ![The home screen: a line to give a task, a card per session with its last lines, the answers it is waiting for and a reply box](docs/img/home.png)
+
+## Remote access
+
+Your running sessions on your phone or another computer, over your own [Tailscale](https://tailscale.com) network. Off
+until you turn it on.
+
+- Every session as a card: working, waiting for you or idle. Answer a question with one tap, or reply without opening it.
+- Open a session as its conversation or as a full terminal, and start new ones.
+- Watch the browser a session drives, live.
+- Projects: each repo's branch, changed files and commits, with diffs you can read on a phone.
+- Notifications when a session finishes or needs you.
+
+To set it up:
+
+1. Install Tailscale on the computer and the phone, signed in to the same account.
+2. On Maestro's home screen, under **On your phone**, press **Turn it on**, then **Pair a phone**.
+3. Scan the code with the phone's camera, and add the page to the home screen.
+
+Only your own Tailscale devices are answered, and only after pairing. A paired device can type into your sessions, so pair
+only devices that are yours. The details are in [docs/remote.md](docs/remote.md).
 
 ## The harness
 

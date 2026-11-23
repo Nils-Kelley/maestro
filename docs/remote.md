@@ -8,8 +8,8 @@ as a full terminal. It is off unless you turn it on.
 1. Install [Tailscale](https://tailscale.com/download) on the computer that runs Maestro and on each device you want to use,
    and sign in to the same account on all of them. Tailscale joins your devices into a private network of your own that works
    from any connection: home, mobile data, a hotel.
-2. In Maestro, type `>` and choose **Remote access**, then **Turn it on**.
-3. Press **Pair a device**. Scan the code with the phone's camera, or copy the link and open it on the other computer. A code
+2. On Maestro's home screen, under **On your phone**, press **Turn it on** (or type `>` and choose **Remote access**).
+3. Press **Pair a phone**. Scan the code with the phone's camera, or copy the link and open it on the other computer. A code
    pairs one device and works for ten minutes; make another for the next device.
 4. On a phone, add the page to the home screen. It then opens like an app.
 

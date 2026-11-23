@@ -891,6 +891,7 @@ function drawHome() {
     <section class="pane wide"><form id="dispatch">${kindMark('claude')}<input class="in" id="task" placeholder="Give Claude a task…" autocomplete="off" spellcheck="false" aria-label="A task for a new Claude Code session">${pickBtn('home', homeProj(), 'in')}<button class="act go" type="submit">Start</button></form>
       <div class="hint">Starts a Claude Code session in that project and keeps you here; it appears below. Leave it empty to open the Console.</div></section>
     <section class="pane wide"><h2>Sessions<span id="deckline">${deckLine()}</span></h2><div id="agents" class="cards"></div></section>
+    <section class="pane wide" id="phone"></section>
     <section class="pane"><h2>Needs you<span>${N.length ? `${N.length} to decide` : 'nothing to decide'}</span></h2>
       ${N.length ? N.map(([lvl, word, what, why, go]) => `<button class="need" data-go="${go}"><span class="st">${GLYPH[lvl]}${word}</span><span><b>${esc(what)}</b><span class="why">${esc(why)}</span></span><span class="go">open →</span></button>`).join('') : `<p class="lead" style="margin:0">${GLYPH.ok} Nothing here needs a decision.</p>`}
     </section>
@@ -916,7 +917,7 @@ function drawHome() {
     </div></section>
   </div>
   <p style="margin:16px 0 0"><label class="chk"><input type="checkbox" id="auto"> Start Maestro ${SIGNIN}</label></p>`;
-  drawAgents();
+  drawAgents(); drawPhone(); if (Date.now() - (drawPhone.at || 0) > 30000) { drawPhone.at = Date.now(); remoteCheck(); }
   requestAnimationFrame(() => requestAnimationFrame(() => document.querySelectorAll('[data-w]').forEach((el) => { el.style.width = el.dataset.w + '%'; })));
   invoke('autostart_get').then((on) => { const c = $('#auto'); if (c) c.checked = !!on; }).catch(() => {});
 }
@@ -1070,8 +1071,24 @@ async function drawRemote(r) {
   ${devices ? `<h3 class="sec">Paired devices</h3><div style="max-width:78ch;margin-bottom:14px">${devices}</div>` : r.running ? `<p class="dim">No device is paired.</p>` : ''}
   <p class="dim" style="max-width:78ch">On, Maestro listens on port ${esc(r.port)} and answers only what arrives over your Tailscale network, and only a device that is paired. A paired device can type into your sessions, which is as much as sitting at this computer: pair only your own, and remove one that is lost. Every pairing, connection and refusal is written to maestro.log. Only sessions that outlive the app can be reached, and Maestro has to be running (hidden is fine). Off, nothing listens.</p>`;
 }
+// The same on the home screen: whether your sessions can be reached from a phone, and the next step to get there. Turning it
+// on and pairing happen right here; the rest (the secure address, removing a device) is on the Remote access screen.
+function drawPhone() {
+  const el = $('#phone'); if (!el) return; const r = REMOTE;
+  const frame = (state, body) => { el.innerHTML = `<h2>On your phone<span>${state}</span></h2><div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap">${body}</div>`; };
+  const what = 'Your sessions on your phone, over your own Tailscale network: read and answer them as a chat or a terminal, watch the browser an agent drives, and read each project’s changes.';
+  if (!r) return frame('checking…', `<p class="dim" style="margin:0">${what}</p>`);
+  const more = '<button class="act" data-go="remote">Remote access…</button>';
+  if (!r.running) return frame('off', `<p class="dim" style="margin:0;flex:1;min-width:30ch;max-width:78ch">${what} Nothing listens until you turn it on.</p><span class="row"><button class="act go" data-remote="on">Turn it on</button>${more}</span>`);
+  if (!r.tailscale) return frame('needs Tailscale', `<p class="bad" style="margin:0;flex:1;min-width:30ch;max-width:78ch">Tailscale is not running on this computer, so no other device can reach it yet. Install it here and on the phone, and sign in to the same account on both.</p><span class="row">${more}</span>`);
+  if (r.firewall && r.firewall !== 'ok') return frame('blocked by the firewall', `<p class="bad" style="margin:0;flex:1;min-width:30ch;max-width:78ch">Windows Firewall ${r.firewall === 'blocked' ? 'has a rule that blocks Maestro' : 'has no rule that lets your Tailscale devices reach Maestro'}, so a phone will not get through.</p><span class="row"><button class="act go" data-remote="allow">Allow it through</button>${more}</span>`);
+  const live = (r.devices || []).filter((d) => d.live), n = (r.devices || []).length;
+  const state = live.length ? `${live.map((d) => esc(d.name)).join(', ')} connected` : n ? `${n} device${n === 1 ? '' : 's'} paired, none connected now` : 'on, no device paired yet';
+  if (r.pair) return frame(state, `<div style="background:#fff;border-radius:10px;padding:6px;line-height:0;flex:none">${r.pair.qr}</div><div style="flex:1;min-width:28ch;max-width:56ch"><p style="margin:0 0 8px">Point the phone’s camera at this code. It pairs <b>one device</b> and stops working after ${Math.max(1, Math.round(r.pair.left / 60))} minute${Math.round(r.pair.left / 60) > 1 ? 's' : ''}. The phone has to be signed in to your Tailscale network.</p><span class="row"><button class="act" data-remote="copy">Copy the link</button><button class="act" data-remote="pair">Make a new code</button>${more}</span></div>`);
+  frame(state, `<p class="dim" style="margin:0;flex:1;min-width:30ch;max-width:78ch">${n ? 'Open Maestro on the phone to pick up where your sessions are.' : 'Pair your phone to reach your sessions from it: it shows a code to scan.'}</p><span class="row"><button class="act${n ? '' : ' go'}" data-remote="pair">${n ? 'Pair another device' : 'Pair a phone'}</button>${more}</span>`);
+}
 // A device is connected from elsewhere: say so wherever you are in the app, not only on the Remote screen.
-function remotePill(r) { const n = (r.devices || []).reduce((a, d) => a + (d.live ? 1 : 0), 0); const el = $('#remote'); if (!el) return; el.hidden = !n; el.textContent = n ? `${n} remote` : ''; el.title = n ? `Connected from elsewhere: ${(r.devices || []).filter((d) => d.live).map((d) => d.name).join(', ')}. Click to see or remove.` : ''; }
+function remotePill(r) { REMOTE = r; drawPhone(); const n = (r.devices || []).reduce((a, d) => a + (d.live ? 1 : 0), 0); const el = $('#remote'); if (!el) return; el.hidden = !n; el.textContent = n ? `${n} remote` : ''; el.title = n ? `Connected from elsewhere: ${(r.devices || []).filter((d) => d.live).map((d) => d.name).join(', ')}. Click to see or remove.` : ''; }
 const remoteCheck = () => invoke('remote_state').then((r) => { REMOTE = r; remotePill(r); if (tab === 'remote') drawRemote(r); }).catch(() => {});
 T.event.listen('remote', (e) => { const { what, name } = e.payload || {}; if (what === 'paired') say(`${name} is now paired for remote access`, 'ok'); if (what === 'refused') say('Remote access refused a device: a wrong, used or expired code', 'bad'); if (what === 'session') return void setTimeout(ccAdopt, 1500); remoteCheck(); });
 
