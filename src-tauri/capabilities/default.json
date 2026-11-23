@@ -5,7 +5,8 @@
   "windows": [
     "main",
     "pop-*",
-    "view-*"
+    "view-*",
+    "black-*"
   ],
   "permissions": [
     "core:default",

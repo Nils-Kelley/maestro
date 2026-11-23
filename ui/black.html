@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Maestro</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; cursor: none; overflow: hidden; -webkit-user-select: none; user-select: none; }
+</style>
+</head>
+<body>
+<script>
+// One of these covers each display in black. Sessions go on working behind it and the computer is kept awake. A key or a click
+// brings the screens back; moving the mouse does not, so a nudged desk leaves them dark.
+const began = Date.now();
+const back = (e) => { if (e) e.preventDefault(); if (Date.now() - began < 500) return; window.__TAURI__.core.invoke('blackout_end').catch(() => {}); };
+for (const ev of ['keydown', 'mousedown', 'touchstart']) addEventListener(ev, back, { passive: false });
+addEventListener('contextmenu', (e) => e.preventDefault());
+</script>
+</body>
+</html>

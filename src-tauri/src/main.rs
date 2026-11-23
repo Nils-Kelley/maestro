@@ -1774,6 +1774,71 @@ async fn pop_out(name: String, kind: String, label: String, app: tauri::AppHandl
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
+// ---- Dark screens. Every display is covered by a black window and the computer is kept awake under it: the sessions go on
+// working, a phone still reaches them, and nothing lights the room. A key or a click takes the windows away again.
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// While the screens are dark the computer is asked not to fall asleep by itself. Windows takes that request from a thread and
+/// keeps it for as long as the thread lives, so a thread of its own holds it; on a Mac `caffeinate` does the same for as long
+/// as it runs. (Elsewhere nothing is asked: the computer keeps to its own settings.)
+fn stay_awake() {
+    std::thread::spawn(|| {
+        use std::sync::atomic::Ordering;
+        #[cfg(windows)]
+        {
+            #[link(name = "kernel32")]
+            extern "system" { fn SetThreadExecutionState(flags: u32) -> u32; }
+            const CONTINUOUS: u32 = 0x8000_0000;
+            const SYSTEM_REQUIRED: u32 = 0x0000_0001;
+            unsafe { SetThreadExecutionState(CONTINUOUS | SYSTEM_REQUIRED); }
+            while DARK.load(Ordering::Relaxed) { std::thread::sleep(std::time::Duration::from_millis(300)); }
+            unsafe { SetThreadExecutionState(CONTINUOUS); }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let held = std::process::Command::new("caffeinate").arg("-i").spawn();
+            while DARK.load(Ordering::Relaxed) { std::thread::sleep(std::time::Duration::from_millis(300)); }
+            if let Ok(mut c) = held { let _ = c.kill(); let _ = c.wait(); }
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        while DARK.load(Ordering::Relaxed) { std::thread::sleep(std::time::Duration::from_millis(300)); }
+    });
+}
+#[tauri::command]
+async fn blackout(app: tauri::AppHandle) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    if DARK.swap(true, Ordering::SeqCst) { return Ok(()); }
+    let screens = app.available_monitors().map_err(|e| e.to_string()).inspect_err(|_| DARK.store(false, Ordering::SeqCst))?;
+    let mut made = 0;
+    for (i, m) in screens.iter().enumerate() {
+        let (at, size, scale) = (m.position(), m.size(), m.scale_factor().max(0.1));
+        let w = tauri::WebviewWindowBuilder::new(&app, format!("black-{i}"), tauri::WebviewUrl::App("black.html".into()))
+            .title("Maestro")
+            .decorations(false)
+            .resizable(false)
+            .skip_taskbar(true)
+            .always_on_top(true)
+            .shadow(false)
+            .position(at.x as f64 / scale, at.y as f64 / scale)
+            .inner_size(size.width as f64 / scale, size.height as f64 / scale)
+            .build();
+        if let Ok(w) = w {
+            // exactly this display, whatever its scale: its own pixels, then the whole of it
+            let _ = w.set_position(tauri::PhysicalPosition::new(at.x, at.y));
+            let _ = w.set_size(tauri::PhysicalSize::new(size.width, size.height));
+            let _ = w.set_fullscreen(true);
+            if i == 0 { let _ = w.set_focus(); }
+            made += 1;
+        }
+    }
+    if made == 0 { DARK.store(false, Ordering::SeqCst); return Err("no display could be covered".into()); }
+    stay_awake();
+    Ok(())
+}
+#[tauri::command]
+fn blackout_end(app: tauri::AppHandle) {
+    DARK.store(false, std::sync::atomic::Ordering::SeqCst);
+    for (label, w) in app.webview_windows() { if label.starts_with("black-") { let _ = w.close(); } }
+}
 /// Give one of the app's views (Git, Memory, the Console…) a window of its own, showing the project the asking window shows.
 /// It is an ordinary window: it can be resized, put on another screen, and covered by other windows.
 #[tauri::command]
@@ -3146,7 +3211,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_allow, remote_secure,
+            blackout, blackout_end, load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_allow, remote_secure,
         ])
         .run(tauri::generate_context!())
         .expect("Maestro could not start");

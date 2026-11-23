@@ -5,6 +5,10 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+### Added
+- Dark screens: a button beside the pin (and `> Dark screens`) covers every display in black and keeps the computer awake,
+  so sessions go on and a phone still reaches them. A key or a click brings the screens back; moving the mouse does not.
+
 ## [0.4.1] - 2026-11-23
 
 ### Changed
