@@ -59,7 +59,8 @@ To set it up:
 
 1. Install Tailscale on the computer and the phone, signed in to the same account.
 2. On Maestro's home screen, under **On your phone**, press **Turn it on**, then **Pair a phone**.
-3. Scan the code with the phone's camera, and add the page to the home screen.
+3. Open the address it shows on the phone and type the six digits (or scan the picture), then add the page to the home
+   screen.
 
 Only your own Tailscale devices are answered, and only after pairing. A paired device can type into your sessions, so pair
 only devices that are yours. The details are in [docs/remote.md](docs/remote.md).

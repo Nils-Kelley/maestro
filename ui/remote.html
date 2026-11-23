@@ -182,6 +182,7 @@ body.gitting #home { transform: translateX(-25%); }
 #gwrap[aria-pressed=false] { color: var(--three); }
 /* ---- the pairing code, read through the camera ---- */
 .scanwrap { position: relative; margin-top: 12px; } .scanwrap .cta { margin-top: 0; } #pair #pairshot { position: absolute; left: 0; top: 0; width: 100%; height: 100%; min-height: 0; padding: 0; opacity: 0; cursor: pointer; font-size: 0; } .scanwrap.live #pairshot { display: none; }
+#pair input.digits { min-height: 64px; text-align: center; font: 600 30px var(--mono); letter-spacing: 0.18em; } #pair input.digits::placeholder { color: var(--three); opacity: 0.45; font-weight: 400; }
 #pair .or { margin: 18px 0 8px; color: var(--three); font-size: 14px; text-align: center; } #pair .cta.quiet { background: var(--raised); color: var(--fg); }
 #scan { position: fixed; inset: 0; z-index: 40; background: #000; display: grid; } #scan video { width: 100%; height: 100%; object-fit: cover; grid-area: 1 / 1; }
 #scan .aim { grid-area: 1 / 1; place-self: center; width: min(68vw, 300px); aspect-ratio: 1; border-radius: 22px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.5); border: 2px solid rgba(255, 255, 255, 0.9); }
@@ -206,13 +207,14 @@ body.gitting #home { transform: translateX(-25%); }
 
 <section id="pair" hidden>
   <h1>Pair this device</h1>
-  <p>On the computer, open Maestro, type <b>&gt;</b> and choose <b>Pair a phone</b>. Scan the code it shows. A code works once, for ten minutes.</p>
-  <div class="scanwrap" id="scanwrap"><button class="cta" type="button" id="scanbtn">Scan the code</button><input type="file" id="pairshot" accept="image/*" capture="environment" aria-label="Take a photo of the code"></div>
-  <p class="or">or paste its link</p>
+  <p>On the computer, Maestro’s home screen has <b>On your phone</b>. Press <b>Pair a phone</b> there and type the six digits it shows.</p>
   <form id="pairform">
-    <input type="text" id="pairin" placeholder="Link or pairing code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Link or pairing code">
-    <button class="cta quiet" type="submit">Pair</button>
+    <input type="text" id="pairin" class="digits" inputmode="numeric" autocomplete="one-time-code" placeholder="000 000" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="The six digits shown on the computer, or a pairing link">
+    <button class="cta" type="submit">Pair</button>
   </form>
+  <p class="or">or</p>
+  <div class="scanwrap" id="scanwrap"><button class="cta quiet" type="button" id="scanbtn">Scan the code instead</button><input type="file" id="pairshot" accept="image/*" capture="environment" aria-label="Take a photo of the code"></div>
+  <p class="or" style="margin-top:14px">A pairing link can be pasted into the box above. A code works once, for ten minutes.</p>
 </section>
 <div id="scan" hidden><video playsinline muted></video><i class="aim"></i><p>Point the camera at the code on the computer</p><button type="button" id="scanstop">Cancel</button></div>
 
@@ -339,7 +341,7 @@ const deviceName = () => { const u = navigator.userAgent; return /iPhone/.test(u
 
 function send(o) { if (S.up) S.ws.send(JSON.stringify(o)); return S.up; }
 function link(state) { const o = $('#offline'); o.hidden = state === 'on'; o.textContent = state === 'off' ? 'Not connected. Trying again…' : 'Connecting…'; }
-function showPair(why) { $('#app').hidden = true; $('#pair').hidden = false; document.body.classList.remove('viewing'); if (why) say(why, 'bad'); }
+function showPair(why) { $('#app').hidden = true; $('#pair').hidden = false; $('#pairin').value = ''; $('#pairin').classList.add('digits'); document.body.classList.remove('viewing'); if (why) say(why, 'bad'); }
 function connect() {
   if (!S.token && !S.pair) return showPair();
   $('#pair').hidden = true; $('#app').hidden = false;
@@ -350,7 +352,7 @@ function connect() {
 }
 function heard(m) {
   if (m.op === 'hello') { if (m.token) { S.token = m.token; store.set('maestro-token', m.token); } S.pair = ''; S.vapid = m.vapid || ''; S.up = true; S.tries = 0; link('on'); $('#host').textContent = m.host || ''; send({ op: 'list' }); if (S.cur) resume(); return; }
-  if (m.op === 'denied') { const paired = !!S.token && !S.pair; S.token = ''; S.pair = ''; store.set('maestro-token', null); S.ws.close(); return showPair(paired ? 'This device is no longer paired with the computer.' : 'That code has been used or has run out. Make a new one on the computer.'); }
+  if (m.op === 'denied') { const paired = !!S.token && !S.pair; S.token = ''; S.pair = ''; store.set('maestro-token', null); S.ws.close(); return showPair(paired ? 'This device is no longer paired with the computer.' : 'That code is not right, or it has run out. Check it on the computer, or make a new one there.'); }
   if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.loaded = true; drawRows(); webOffer(); if (G.tab === 'projects') drawRepos(); if (G.cur && gitTop().k === 'repo') drawGit(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
   if (m.op === 'chat') return heardChat(m);
   if (m.op === 'browser' || m.op === 'frame') return heardWeb(m);
@@ -734,6 +736,9 @@ $('#pairshot').addEventListener('change', async (e) => {
   } catch (err) { say(String(err.message || err), 'bad'); }
 });
 
+// the six digits, as they are typed: shown in two groups, and sent as soon as the sixth is in
+$('#pairin').addEventListener('input', (e) => { const el = e.target; const v = el.value; if (/[^\d\s-]/.test(v)) { el.classList.remove('digits'); return; } el.classList.add('digits'); const d = v.replace(/\D/g, '').slice(0, 6); el.value = d.length > 3 ? `${d.slice(0, 3)} ${d.slice(3)}` : d; if (d.length === 6) $('#pairform').requestSubmit(); });
+
 let endTimer = 0;
 function armEnd(on) { const b = $('#mend'); clearTimeout(endTimer); b.dataset.sure = on ? '1' : ''; b.textContent = on ? 'Tap again to end it' : 'End session'; if (on) endTimer = setTimeout(() => armEnd(false), 4000); }
 // the round button: send what is typed; with nothing typed, stop a working conversation, or press Enter in a terminal
@@ -828,7 +833,7 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('submit', (e) => {
   e.preventDefault(); const f = e.target;
-  if (f.id === 'pairform') { const v = $('#pairin').value.trim(); const tok = v.includes('#') ? v.slice(v.indexOf('#') + 1) : v; if (tok.length < 16) return say('That is not a pairing code', 'bad'); S.pair = tok; S.tries = 0; return connect(); }
+  if (f.id === 'pairform') { const v = $('#pairin').value.trim(); const digits = v.replace(/[\s-]/g, ''); const tok = /^\d{6}$/.test(digits) ? digits : v.includes('#') ? v.slice(v.indexOf('#') + 1) : v; if (!/^\d{6}$/.test(tok) && tok.length < 16) return say('Type the six digits the computer shows', 'bad'); $('#pairin').blur(); S.pair = tok; S.tries = 0; return connect(); }
   if (f.id === 'sheet-new') { if (S.proj == null) return say('No project here keeps its sessions running', 'bad'); store.set('maestro-proj', S.proj); const p = S.projects.find((x) => String(x.i) === String(S.proj)); const text = S.kind === 'claude' ? $('#nprompt').value.trim() : ''; openView({ name: '', kind: S.kind, label: text ? text.replace(/\s+/g, ' ').slice(0, 60) : S.kind === 'claude' ? 'Claude' : 'Shell', project: p ? p.name : '' }, { kind: S.kind, proj: Number(S.proj), prompt: text, place: p ? p.name : '' }); $('#nprompt').value = ''; return; }
   if (f.id === 'compose') {
     const c = S.cur; const inp = $('#line'); if (!c) return; const text = inp.value; const what = $('#send').dataset.what; inp.value = ''; buzz(10);

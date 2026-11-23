@@ -2011,17 +2011,56 @@ static REMOTE_CONFIG: Mutex<()> = Mutex::new(());
 fn pair_ok(have: &Option<(String, std::time::Instant)>, said: &str) -> bool {
     matches!(have, Some((code, at)) if at.elapsed().as_secs() < PAIR_SECS && same_token(code, said))
 }
+/// The same code in a form that is read off the screen and typed into the phone: six digits. So few can be guessed, so it
+/// stands for a few tries only: after the fifth wrong one the code is gone, the long one with it, and a new one has to be made.
+static REMOTE_SHORT: Mutex<Option<(String, u32)>> = Mutex::new(None);
+const SHORT_TRIES: u32 = 5;
+fn short_code() -> Result<String, String> {
+    loop {
+        let mut b = [0u8; 4];
+        getrandom::fill(&mut b).map_err(|e| format!("no random numbers from this system: {e}"))?;
+        let n = u32::from_le_bytes(b);
+        // (the last few numbers a u32 can hold are left out, so that every code is as likely as any other)
+        if n < 4_294_000_000 { return Ok(format!("{:06}", n % 1_000_000)); }
+    }
+}
+/// What was typed, against the short code: right, or one try fewer.
+fn short_try(have: &mut Option<(String, u32)>, said: &str) -> bool {
+    let Some((code, tries)) = have.as_mut() else { return false };
+    if same_token(code, said) { return true; }
+    *tries += 1;
+    if *tries >= SHORT_TRIES { *have = None; }
+    false
+}
+/// Six digits, however they were typed ("123 456", "123-456").
+fn typed_code(said: &str) -> Option<String> {
+    let d: String = said.chars().filter(|c| !c.is_whitespace() && *c != '-').collect();
+    (d.len() == 6 && d.chars().all(|c| c.is_ascii_digit())).then_some(d)
+}
 fn remote_pair_code() -> Result<String, String> {
-    let code = hex_random(16)?;
-    *REMOTE_PAIR.lock().map_err(|e| e.to_string())? = Some((code.clone(), std::time::Instant::now()));
+    let (code, short) = (hex_random(16)?, short_code()?);
+    let mut pair = REMOTE_PAIR.lock().map_err(|e| e.to_string())?;
+    *REMOTE_SHORT.lock().map_err(|e| e.to_string())? = Some((short, 0));
+    *pair = Some((code.clone(), std::time::Instant::now()));
     Ok(code)
 }
 /// A device gives the pairing code: the code is used up and the device gets a token of its own (id, name, token).
 fn remote_enroll(said: &str, name: &str) -> Option<(String, String, String)> {
     {
         let mut pair = REMOTE_PAIR.lock().ok()?;
-        if !pair_ok(&pair, said) { return None; }
+        let mut short = REMOTE_SHORT.lock().ok()?;
+        let ok = match typed_code(said) {
+            Some(digits) => {
+                let live = matches!(&*pair, Some((_, at)) if at.elapsed().as_secs() < PAIR_SECS);
+                let right = live && short_try(&mut short, &digits);
+                if short.is_none() { *pair = None; }
+                right
+            }
+            None => pair_ok(&pair, said),
+        };
+        if !ok { return None; }
         *pair = None;
+        *short = None;
     }
     let (id, token) = (hex_random(4).ok()?, hex_random(16).ok()?);
     let shown: String = one_line(name).chars().filter(|c| !c.is_control()).take(40).collect();
@@ -2135,6 +2174,7 @@ fn remote_start() -> Result<u16, String> {
 fn remote_stop() {
     if let Some(r) = REMOTE.lock().ok().and_then(|mut r| r.take()) { r.stop.store(true, std::sync::atomic::Ordering::Relaxed); }
     if let Ok(mut pair) = REMOTE_PAIR.lock() { *pair = None; }
+    if let Ok(mut short) = REMOTE_SHORT.lock() { *short = None; }
 }
 /// The first lines of a request: the method, the path without its query, and the headers with their names in lower case.
 /// Anything that is not a plain HTTP/1 request for a path is refused.
@@ -2900,7 +2940,7 @@ fn remote_state() -> Value {
     let code = REMOTE_PAIR.lock().ok().and_then(|p| p.as_ref().filter(|(_, at)| at.elapsed().as_secs() < PAIR_SECS).map(|(c, at)| (c.clone(), PAIR_SECS - at.elapsed().as_secs())));
     let (secure_name, secure_on) = port.map(|p| remote_secure_state(p, false)).unwrap_or_default();
     let pair = match (port, ip, code) {
-        (Some(port), Some(ip), Some((code, left))) => { let url = if secure_on { format!("https://{secure_name}/#{code}") } else { format!("http://{ip}:{port}/#{code}") }; json!({ "qr": remote_qr(&url), "url": url, "left": left }) }
+        (Some(port), Some(ip), Some((code, left))) => { let url = if secure_on { format!("https://{secure_name}/#{code}") } else { format!("http://{ip}:{port}/#{code}") }; let open = url.split('#').next().unwrap_or("").trim_end_matches('/').to_string(); json!({ "qr": remote_qr(&url), "url": url, "left": left, "open": open, "short": REMOTE_SHORT.lock().ok().and_then(|s| s.as_ref().map(|(c, _)| c.clone())) }) }
         _ => Value::Null,
     };
     let firewall = port.and_then(remote_firewall);
@@ -2976,6 +3016,7 @@ fn remote_only() {
         Ok((port, code)) => {
             let ip = tailscale_ip();
             println!("Maestro remote, pairing link (one device, ten minutes): http://{}:{port}/#{code}", ip.map(|i| i.to_string()).unwrap_or_else(|| "127.0.0.1".into()));
+            if let Some((short, _)) = REMOTE_SHORT.lock().ok().and_then(|s| s.clone()) { println!("or the code to type on the page: {short}"); }
             if ip.is_none() { println!("Tailscale is not running here: only this machine itself is answered."); }
             match remote_firewall(port).as_deref() {
                 Some("ok") | None => {}
@@ -3315,6 +3356,17 @@ mod tests {
         assert!(!pair_ok(&Some(("abcd".into(), now)), "abce"));
         assert!(!pair_ok(&None, "abcd") && !pair_ok(&Some(("abcd".into(), now)), ""));
         if let Some(old) = now.checked_sub(std::time::Duration::from_secs(PAIR_SECS + 1)) { assert!(!pair_ok(&Some(("abcd".into(), old)), "abcd")); }
+        // the code that is typed: six digits however they are spaced, right or one try fewer, gone after the fifth wrong one
+        assert_eq!(typed_code(" 123 456 "), Some("123456".into()));
+        assert_eq!(typed_code("123-456"), Some("123456".into()));
+        assert!(typed_code("12345").is_none() && typed_code("1234567").is_none() && typed_code("12345a").is_none() && typed_code("0123456789abcdef0123456789abcdef").is_none());
+        let made = short_code().unwrap();
+        assert!(made.len() == 6 && made.chars().all(|c| c.is_ascii_digit()));
+        let mut short = Some(("123456".to_string(), 0));
+        assert!(short_try(&mut short, "123456") && short.is_some());
+        for _ in 0..SHORT_TRIES - 1 { assert!(!short_try(&mut short, "000000") && short.is_some()); }
+        assert!(!short_try(&mut short, "000000") && short.is_none());
+        assert!(!short_try(&mut short, "123456"), "a code that ran out of tries is no longer a way in");
         assert!(same_token("a5f9", "a5f9") && !same_token("a5f9", "a5f8") && !same_token("a5f9", "a5f") && !same_token("", "a5f9"));
         assert_eq!(token_hash("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         let token = "0123456789abcdef0123456789abcdef";

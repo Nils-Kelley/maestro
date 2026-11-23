@@ -9,13 +9,13 @@ as a full terminal. It is off unless you turn it on.
    and sign in to the same account on all of them. Tailscale joins your devices into a private network of your own that works
    from any connection: home, mobile data, a hotel.
 2. On Maestro's home screen, under **On your phone**, press **Turn it on** (or type `>` and choose **Remote access**).
-3. Press **Pair a phone**. Scan the code with the phone's camera, or copy the link and open it on the other computer. A code
-   pairs one device and works for ten minutes; make another for the next device.
+3. Press **Pair a phone**. It shows an address and six digits: open the address on the phone and type the digits. Or scan
+   the picture with the phone's camera, or copy the link and open it on the other computer. A code pairs one device and
+   works for ten minutes; make another for the next device.
 4. On a phone, add the page to the home screen. It then opens like an app.
 
-A page that is not paired (the one on the home screen, after its device was removed) has **Scan the code**: on the computer
-type `>` and choose **Pair a phone**, and point the phone at the code. At the secure address the page uses the camera itself;
-at the plain one it asks for a photo of the code.
+A page that is not paired (the one on the home screen, after its device was removed) asks for the six digits, and can scan
+the picture instead: at the secure address it uses the camera itself, at the plain one it asks for a photo.
 
 Maestro has to be running on the computer; hidden in the tray is fine. On Windows the first start may ask whether Maestro may
 accept connections: allow it for **private** networks, which is how Windows classes the Tailscale adapter. If a device then
@@ -85,7 +85,9 @@ Turned on, Maestro listens on one port (4747, or `remote.port` in [`maestro.conf
   a device's token and cuts its connection at once. A device that has not connected for 30 days has to pair again.
 - **You can see it.** While a device is connected, the top of the Maestro window says so. Every pairing, connection, refusal
   and removal is written to `maestro.log` with the time and the address.
-- **Guessing is shut out.** After five wrong codes from one address, that address is not answered for five minutes.
+- **Guessing is shut out.** After five wrong codes from one address, that address is not answered for five minutes. The six
+  digits are a short form of the same code, so they stand for five tries in all: after the fifth wrong one the code is gone
+  and a new one has to be made.
 
 A paired device can type into your sessions and start new ones. That is as much as sitting at the computer, so pair only
 devices that are yours, keep a screen lock on them, and remove one that is lost. The page itself cannot read or change a
