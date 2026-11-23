@@ -5,6 +5,8 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-23
+
 ### Changed
 - Remote access: a session has a Git view (what has changed in its repo, with diffs), and Terminal on a Claude Code
   session is a shell of your own in its project. Claude Code's own screen is under `···`.
