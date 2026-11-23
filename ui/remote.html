@@ -181,6 +181,7 @@ body.gitting #home { transform: translateX(-25%); }
 .diff.nowrap { overflow-x: auto; overscroll-behavior-x: contain; } .diff.nowrap .in { display: inline-block; min-width: 100%; } .diff.nowrap .l span { white-space: pre; overflow-wrap: normal; } .diff.nowrap .h { overflow: visible; }
 #gwrap[aria-pressed=false] { color: var(--three); }
 /* ---- the pairing code, read through the camera ---- */
+.scanwrap { position: relative; margin-top: 12px; } .scanwrap .cta { margin-top: 0; } #pair #pairshot { position: absolute; left: 0; top: 0; width: 100%; height: 100%; min-height: 0; padding: 0; opacity: 0; cursor: pointer; font-size: 0; } .scanwrap.live #pairshot { display: none; }
 #pair .or { margin: 18px 0 8px; color: var(--three); font-size: 14px; text-align: center; } #pair .cta.quiet { background: var(--raised); color: var(--fg); }
 #scan { position: fixed; inset: 0; z-index: 40; background: #000; display: grid; } #scan video { width: 100%; height: 100%; object-fit: cover; grid-area: 1 / 1; }
 #scan .aim { grid-area: 1 / 1; place-self: center; width: min(68vw, 300px); aspect-ratio: 1; border-radius: 22px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.5); border: 2px solid rgba(255, 255, 255, 0.9); }
@@ -206,13 +207,12 @@ body.gitting #home { transform: translateX(-25%); }
 <section id="pair" hidden>
   <h1>Pair this device</h1>
   <p>On the computer, open Maestro, type <b>&gt;</b> and choose <b>Pair a phone</b>. Scan the code it shows. A code works once, for ten minutes.</p>
-  <button class="cta" type="button" id="scanbtn">Scan the code</button>
+  <div class="scanwrap" id="scanwrap"><button class="cta" type="button" id="scanbtn">Scan the code</button><input type="file" id="pairshot" accept="image/*" capture="environment" aria-label="Take a photo of the code"></div>
   <p class="or">or paste its link</p>
   <form id="pairform">
     <input type="text" id="pairin" placeholder="Link or pairing code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Link or pairing code">
     <button class="cta quiet" type="submit">Pair</button>
   </form>
-  <input type="file" id="pairshot" accept="image/*" capture="environment" hidden>
 </section>
 <div id="scan" hidden><video playsinline muted></video><i class="aim"></i><p>Point the camera at the code on the computer</p><button type="button" id="scanstop">Cancel</button></div>
 
@@ -693,7 +693,7 @@ let scanning = null;
 const lib = (src) => new Promise((ok, no) => { if (window.jsQR) return ok(); const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = () => no(new Error('the part of the page that reads codes did not load')); document.head.appendChild(el); });
 async function codeReader() {
   if ('BarcodeDetector' in window) { try { const d = new BarcodeDetector({ formats: ['qr_code'] }); return async (c) => { const r = await d.detect(c); return r[0] ? r[0].rawValue : ''; }; } catch (_) {} }
-  await lib('jsqr.js'); return async (c) => { const x = c.getContext('2d', { willReadFrequently: true }); const im = x.getImageData(0, 0, c.width, c.height); const r = jsQR(im.data, im.width, im.height); return r ? r.data : ''; };
+  await lib('jsqr.js'); return async (c) => { const x = c.getContext('2d', { willReadFrequently: true }); const im = x.getImageData(0, 0, c.width, c.height); const r = jsQR(im.data, im.width, im.height, { inversionAttempts: 'attemptBoth' }); return r ? r.data : ''; };
 }
 // what a code says: a link to this page with the code after #. One made for another address of this computer (its secure one) is opened there.
 function scanned(text) {
@@ -702,9 +702,12 @@ function scanned(text) {
   if (u && /^https?:$/.test(u.protocol) && u.origin !== location.origin) { location.href = u.href; return true; }
   S.pair = m[1].toLowerCase(); S.tries = 0; connect(); return true;
 }
+// where the page may use the camera itself the button opens it; elsewhere the tap lands on the file field that lies over the button
+const liveCamera = () => !!(isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+$('#scanwrap').classList.toggle('live', liveCamera());
 async function scan() {
-  if (!(isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return $('#pairshot').click();
-  let stream; try { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } } }); } catch (_) { return $('#pairshot').click(); }
+  if (!liveCamera()) return $('#pairshot').click();
+  let stream; try { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } } }); } catch (_) { $('#scanwrap').classList.remove('live'); return say('The camera could not be opened here. Tap again to take a photo of the code instead.', 'warn'); }
   const v = $('#scan video'); v.srcObject = stream; $('#scan').hidden = false; scanning = { stream }; try { await v.play(); } catch (_) {}
   let read; try { read = await codeReader(); } catch (e) { scanStop(); return say(String(e.message || e), 'bad'); }
   const c = document.createElement('canvas'); const mine = scanning;
@@ -720,8 +723,14 @@ $('#pairshot').addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0]; e.target.value = ''; if (!file) return; say('Reading the code…');
   try {
     const read = await codeReader(); const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('that picture could not be opened')); const fr = new FileReader(); fr.onload = () => { i.src = fr.result; }; fr.onerror = () => no(new Error('that picture could not be read')); fr.readAsDataURL(file); });
-    for (const side of [1400, 800, 2200]) { const k = Math.min(1, side / Math.max(img.naturalWidth, img.naturalHeight)); const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k); c.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0, c.width, c.height); const t = await read(c); if (t && scanned(t)) return; }
-    say('No pairing code was found in that picture. Fill the frame with the code and try again.', 'bad');
+    // the whole picture, then its middle (a code photographed from a distance is small in it), each at a few sizes
+    const W = img.naturalWidth, H = img.naturalHeight; let seen = '';
+    look: for (const part of [1, 0.6, 0.35]) for (const side of [1200, 700, 1900]) {
+      const w = W * part, h = H * part; const k = Math.min(1, side / Math.max(w, h)); const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+      c.getContext('2d', { willReadFrequently: true }).drawImage(img, (W - w) / 2, (H - h) / 2, w, h, 0, 0, c.width, c.height);
+      let t = ''; try { t = await read(c); } catch (_) {} if (t) { seen = t; if (scanned(t)) return; break look; }
+    }
+    say(seen ? 'That code is not a Maestro pairing code. On the computer, type > and choose Pair a phone.' : 'No code was found in that picture. Hold the phone closer, so the code fills most of the frame, and try again.', 'bad');
   } catch (err) { say(String(err.message || err), 'bad'); }
 });
 
