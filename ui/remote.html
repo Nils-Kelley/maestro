@@ -105,6 +105,13 @@ body.viewing #home { transform: translateX(-25%); }
 .m.assistant a { color: var(--accent); text-decoration: none; }
 .m.tools { color: var(--three); font-size: 14px; } .m.tools summary { list-style: none; cursor: pointer; overflow-wrap: anywhere; } .m.tools summary::-webkit-details-marker { display: none; }
 .m.tools div { margin-top: 6px; font: 12.5px/1.55 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* in detail: each step as a block with what it was given, what came back under it, and reasoning set apart */
+.msgs.detail { gap: 10px; }
+.m.step { border-left: 2px solid var(--accent); padding: 2px 0 2px 11px; } .m.step b { display: block; font: 600 13px var(--mono); color: var(--accent); } .m.step pre, .m.out pre { margin: 5px 0 0; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+.m.step.long:not(.open) pre { max-height: 15em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 78%, transparent); mask-image: linear-gradient(#000 78%, transparent); } .m.step button { margin-top: 4px; padding: 6px 0; color: var(--accent); font-size: 13.5px; }
+.m.out { border-left: 2px solid var(--line); padding: 0 0 0 11px; margin-top: -4px; } .m.out pre { margin: 0; color: var(--three); } .m.out.failed { border-left-color: var(--bad); } .m.out.failed pre { color: #ffb4b2; }
+.m.out.long:not(.open) pre { max-height: 9em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); } .m.out button { margin-top: 4px; padding: 6px 0; color: var(--accent); font-size: 13.5px; }
+.m.think { border-left: 2px solid var(--three); padding: 2px 0 2px 11px; color: var(--two); font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; } .m.think::before { content: "Thinking"; display: block; font: 600 12px var(--sans); font-style: normal; color: var(--three); margin-bottom: 3px; letter-spacing: 0.02em; }
 .m.busy { display: flex; align-items: center; gap: 9px; color: var(--two); font-size: 15px; }
 /* the page a session's browser is showing: a picture of it, as wide as the screen, that can be pinched larger and moved about */
 .web { position: absolute; inset: 0; display: flex; flex-direction: column; background: #0b0b0d; }
@@ -244,7 +251,7 @@ body.gitting #home { transform: translateX(-25%); }
     <div class="vhead">
       <button class="tool" type="button" id="back" aria-label="Back to the sessions"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <span class="tt"><span class="t" id="vtitle"></span><span class="n" id="vsub"></span></span>
-      <span class="modes" id="modes" role="group" aria-label="How to show this session"><button type="button" data-mode="chat">Chat</button><button type="button" data-mode="term">Terminal</button><button type="button" data-mode="web" hidden>Browser</button></span>
+      <span class="modes" id="modes" role="group" aria-label="How to show this session"><button type="button" data-mode="chat">Chat</button><button type="button" data-mode="detail">Detail</button><button type="button" data-mode="term">Terminal</button><button type="button" data-mode="web" hidden>Browser</button></span>
       <button class="tool" type="button" id="more" aria-label="More for this session"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18.5" cy="12" r="1.6" fill="currentColor"/></svg></button>
     </div>
     <div class="body">
@@ -356,7 +363,7 @@ function heard(m) {
   if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.loaded = true; drawRows(); webOffer(); if (G.tab === 'projects') drawRepos(); if (G.cur && gitTop().k === 'repo') drawGit(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
   if (m.op === 'chat') return heardChat(m);
   if (m.op === 'browser' || m.op === 'frame') return heardWeb(m);
-  if (m.op === 'repos') { G.repos = m.items || []; G.loaded = true; return drawRepos(); }
+  if (m.op === 'repos') { G.repos = m.items || []; G.more = m.more || 0; G.loaded = G.repos.length > 0 || !G.more; return drawRepos(); }
   if (m.op === 'repo' || m.op === 'commit' || m.op === 'diff' || m.op === 'giterr') return heardGit(m);
   if (m.op === 'out') { const c = S.cur; if (c && c.id === m.id && c.term) c.term.write(m.data, c.starting ? () => { if (S.cur === c && c.term && shows(c.term)) { starting(null); toChat(c); } } : undefined); return; }
   if (m.op === 'opened') { if (S.cur && S.cur.id === m.id) { S.cur.name = m.name; drawRows(); toChat(S.cur); } send({ op: 'list' }); return; }
@@ -364,7 +371,7 @@ function heard(m) {
   if (m.op === 'err') { say(m.text || 'That did not work', 'bad'); if (S.cur && S.cur.id === m.id) closeView(); }
 }
 // ask again while someone is looking: the list, and the conversation that is open
-setInterval(() => { if (!S.up || document.visibilityState !== 'visible') return; send({ op: 'list' }); const c = S.cur; if (c && c.mode === 'chat' && c.name) send({ op: 'chat', name: c.name, after: c.last || '' }); }, 2000);
+setInterval(() => { if (!S.up || document.visibilityState !== 'visible') return; send({ op: 'list' }); const c = S.cur; if (c && chatty(c) && c.name) send({ op: 'chat', name: c.name, after: c.last || '', detail: c.mode === 'detail' }); }, 2000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (S.up) send({ op: 'list' }); else if ((S.token || S.pair) && S.ws && S.ws.readyState > 1) { S.tries = 0; connect(); } } });
 
 // ---- what a session's screen says: what it is doing, the answers it is waiting for, its last lines ----
@@ -446,6 +453,8 @@ function openReply(s) { S.replyTo = s; $('#rtitle').textContent = s.label || s.n
 // ---- one session: as a conversation (Claude Code), or as its terminal ----
 const fontSize = () => Math.max(9, Math.min(20, (wide() ? 13 : 12) + S.font));
 const listed = (name) => S.sessions.find((x) => x.name === name);
+// a session shown as what was said: in short (Chat) or with every step and what came back (Detail)
+const chatty = (c) => c.mode === 'chat' || c.mode === 'detail';
 const KIND = { claude: 'Claude Code', ubuntu: 'Shell' };
 const unnamed = (s) => !s.label || /^(claude|shell|session)$/i.test(s.label.trim());
 function openView(who, fresh) {
@@ -457,7 +466,7 @@ function openView(who, fresh) {
   $('#vtitle').textContent = who.label; $('#vsub').textContent = who.project; $('#vsub').className = 'n'; $('#line').value = ''; $('#msgs').innerHTML = ''; $('#answers').hidden = true; $('#answers').dataset.sig = '';
   webOffer();
   // a session being started is watched in its terminal; one that is running opens as a conversation
-  setMode(who.kind === 'claude' && !fresh && store.get('maestro-mode') !== 'term' ? 'chat' : 'term');
+  const pref = store.get('maestro-mode'); setMode(who.kind === 'claude' && !fresh && pref !== 'term' ? (pref === 'detail' ? 'detail' : 'chat') : 'term');
   drawRows();
 }
 function setMode(mode) {
@@ -465,9 +474,9 @@ function setMode(mode) {
   if (c.mode === 'term') dropTerm(c);
   if (c.mode === 'web') dropWeb();
   c.mode = mode; document.querySelectorAll('#modes [data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
-  $('#chat').hidden = mode !== 'chat'; $('#web').hidden = mode !== 'web'; $('#tbody').hidden = mode !== 'term'; $('#keys').hidden = mode !== 'term'; $('#msizeline').hidden = mode !== 'term';
+  $('#chat').hidden = mode !== 'chat' && mode !== 'detail'; $('#msgs').classList.toggle('detail', mode === 'detail'); $('#web').hidden = mode !== 'web'; $('#tbody').hidden = mode !== 'term'; $('#keys').hidden = mode !== 'term'; $('#msizeline').hidden = mode !== 'term';
   $('#line').placeholder = c.kind !== 'claude' ? 'Command' : 'Message'; grow();
-  if (mode === 'chat') { c.items = []; c.last = ''; c.chatOk = null; $('#msgs').innerHTML = '<div class="note">Loading the conversation…</div>'; send({ op: 'chat', name: c.name, after: '' }); }
+  if (mode === 'chat' || mode === 'detail') { c.items = []; c.last = ''; c.chatOk = null; $('#msgs').innerHTML = '<div class="note">Loading the conversation…</div>'; send({ op: 'chat', name: c.name, after: '', detail: mode === 'detail' }); }
   else if (mode === 'web') startWeb(c);
   else startTerm(c);
   headState();
@@ -480,7 +489,7 @@ function starting(c, f) {
   el.classList.remove('off'); starting.t = setTimeout(() => starting(null), 20000);
 }
 // once it is up, a Claude Code session started from here is shown as its conversation (unless the terminal is what you use)
-function toChat(c) { if (!c.toChat || !c.name || c.starting || S.cur !== c || c.mode !== 'term') return; c.toChat = false; setMode('chat'); }
+function toChat(c) { if (!c.toChat || !c.name || c.starting || S.cur !== c || c.mode !== 'term') return; c.toChat = false; setMode(store.get('maestro-mode') === 'detail' ? 'detail' : 'chat'); }
 const shows = (term) => { const b = term.buffer.active; for (let i = 0; i < b.length; i++) { const l = b.getLine(i); if (l && l.translateToString(true).trim()) return true; } return false; };
 function startTerm(c) {
   if (typeof Terminal === 'undefined') return say('The terminal part of the page did not load', 'bad');
@@ -500,7 +509,7 @@ function dropTerm(c, later) {
 }
 function refit() { const c = S.cur; if (!c || !c.term) return; try { c.fit.fit(); } catch (_) {} if (c.term.cols !== c.cols || c.term.rows !== c.rows) { c.cols = c.term.cols; c.rows = c.term.rows; send({ op: 'size', id: c.id, cols: c.cols, rows: c.rows }); } }
 // the connection came back: pick up where the screen is
-function resume() { const c = S.cur; if (!c.name) return closeView(); if (c.mode === 'chat') return void send({ op: 'chat', name: c.name, after: c.last || '' }); if (c.mode === 'web') return startWeb(c); c.id = `r${++S.n}-${Date.now().toString(36)}`; c.term.reset(); send({ op: 'open', id: c.id, name: c.name, cols: c.term.cols, rows: c.term.rows }); }
+function resume() { const c = S.cur; if (!c.name) return closeView(); if (chatty(c)) return void send({ op: 'chat', name: c.name, after: c.last || '', detail: c.mode === 'detail' }); if (c.mode === 'web') return startWeb(c); c.id = `r${++S.n}-${Date.now().toString(36)}`; c.term.reset(); send({ op: 'open', id: c.id, name: c.name, cols: c.term.cols, rows: c.term.rows }); }
 function closeView(quiet) {
   const c = S.cur; if (!c) return; S.cur = null;
   dropTerm(c, !quiet && !wide()); if (c.mode === 'web') dropWeb(); $('#answers').hidden = true;
@@ -543,18 +552,27 @@ function md(src) {
   }
   flush(); return out.join('');
 }
+const toolName = (t) => t.replace(/^mcp__(?:plugin_)?(.+?)__(?:browser_)?(\w+)/, (_, a, b) => `${a.replace(/_/g, ' ')}: ${b.replace(/_/g, ' ')}`);
 function heardChat(m) {
-  const c = S.cur; if (!c || c.mode !== 'chat' || c.name !== m.name) return;
+  const c = S.cur; if (!c || !chatty(c) || c.name !== m.name || !!m.detail !== (c.mode === 'detail')) return;
   const box = $('#chat'); const el = $('#msgs');
   if (!m.found) { if (c.chatOk === true) return;   // it was found a moment ago: what is shown stays
-    if (c.chatOk !== false) { c.chatOk = false; el.innerHTML = '<div class="note">This session’s conversation was not found on the computer. It is shown as its terminal instead.</div>'; setTimeout(() => { if (S.cur === c && c.mode === 'chat') setMode('term'); }, 1200); } return; }
+    if (c.chatOk !== false) { c.chatOk = false; el.innerHTML = '<div class="note">This session’s conversation was not found on the computer. It is shown as its terminal instead.</div>'; setTimeout(() => { if (S.cur === c && chatty(c)) setMode('term'); }, 1200); } return; }
   const stuck = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   if (m.reset || c.chatOk !== true) { c.items = []; el.innerHTML = ''; }
   c.chatOk = true;
   for (const it of m.items || []) {
     if (c.items.some((x) => x.id === it.id)) continue; c.items.push(it); c.last = it.id;
     const prev = el.lastElementChild && !el.lastElementChild.classList.contains('busy') ? el.lastElementChild : (el.lastElementChild ? el.lastElementChild.previousElementSibling : null);
-    if (it.role === 'tool') { let d = prev && prev.classList.contains('tools') ? prev : null; if (!d) { d = document.createElement('details'); d.className = 'm tools'; d.innerHTML = '<summary></summary>'; el.insertBefore(d, $('.busy', el)); } const line = document.createElement('div'); it.text = it.text.replace(/^mcp__(?:plugin_)?(.+?)__(?:browser_)?(\w+)/, (_, a, b) => `${a.replace(/_/g, ' ')}: ${b.replace(/_/g, ' ')}`); line.textContent = it.text; d.appendChild(line); const n = d.children.length - 1; d.firstChild.textContent = n === 1 ? it.text : `${n} steps · ${it.text}`; continue; }
+    if (c.mode === 'detail' && it.role !== 'user' && it.role !== 'assistant') {
+      // a step with all it was given, what came back (the first lines; a tap shows the rest), and reasoning where there is any
+      const at = it.text.indexOf('\n'); const d = document.createElement('div');
+      if (it.role === 'tool') { const n = at < 0 ? 0 : it.text.slice(at + 1).split('\n').length; d.className = `m step${n > 10 ? ' long' : ''}`; d.innerHTML = `<b>${esc(toolName(at < 0 ? it.text : it.text.slice(0, at)))}</b>${at < 0 ? '' : `<pre>${esc(it.text.slice(at + 1))}</pre>`}${n > 10 ? `<button type="button" data-more>${n} lines · show all</button>` : ''}`; }
+      else if (it.role === 'thinking') { d.className = 'm think'; d.textContent = it.text; }
+      else { const n = it.text.split('\n').length; d.className = `m out${it.role === 'failed' ? ' failed' : ''}${n > 6 ? ' long' : ''}`; d.innerHTML = `<pre>${esc(it.text)}</pre>${n > 6 ? `<button type="button" data-more>${n} lines · show all</button>` : ''}`; }
+      el.insertBefore(d, $('.busy', el)); continue;
+    }
+    if (it.role === 'tool') { let d = prev && prev.classList.contains('tools') ? prev : null; if (!d) { d = document.createElement('details'); d.className = 'm tools'; d.innerHTML = '<summary></summary>'; el.insertBefore(d, $('.busy', el)); } const line = document.createElement('div'); it.text = toolName(it.text); line.textContent = it.text; d.appendChild(line); const n = d.children.length - 1; d.firstChild.textContent = n === 1 ? it.text : `${n} steps · ${it.text}`; continue; }
     const d = document.createElement('div'); d.className = `m ${it.role}`; if (it.role === 'assistant') d.innerHTML = md(it.text); else d.textContent = it.text; el.insertBefore(d, $('.busy', el));
   }
   if (!c.items.length && !$('.note', el)) el.innerHTML = `<div class="note">${c.asked ? 'Claude Code is starting. Your message shows here in a moment.' : 'Nothing has been said in this session yet. Write a message below to begin.'}</div>`;
@@ -562,7 +580,7 @@ function heardChat(m) {
 }
 // the last line of a conversation while the session works: what it is doing
 function busyLine() {
-  const c = S.cur; if (!c || c.mode !== 'chat' || !c.chatOk) return; const el = $('#msgs'); let b = $('.busy', el);
+  const c = S.cur; if (!c || !chatty(c) || !c.chatOk) return; const el = $('#msgs'); let b = $('.busy', el);
   if (!c.working) { if (b) b.remove(); return; }
   const s = listed(c.name); const pk = s ? read(s.screen, s.kind) : { now: '' };
   if (!b) { const box = $('#chat'); const stuck = box.scrollHeight - box.scrollTop - box.clientHeight < 80; b = document.createElement('div'); b.className = 'm busy'; b.innerHTML = '<i class="spin"></i><span></span>'; el.appendChild(b); if (stuck) box.scrollTop = box.scrollHeight; }
@@ -571,7 +589,7 @@ function busyLine() {
 
 // ---- the browser of a session: what its page looks like now, each time it changes ----
 // Browser is offered for a session whose programs drive one (and stays while it is being looked at)
-function webOffer() { const c = S.cur; if (!c) return; const s = listed(c.name); const has = !!(s && s.browser) || c.mode === 'web'; $('#modes [data-mode=web]').hidden = !has; $('#modes').hidden = c.kind !== 'claude' && !has; $('#modes [data-mode=chat]').hidden = c.kind !== 'claude'; }
+function webOffer() { const c = S.cur; if (!c) return; const s = listed(c.name); const has = !!(s && s.browser) || c.mode === 'web'; $('#modes [data-mode=web]').hidden = !has; $('#modes').hidden = c.kind !== 'claude' && !has; $('#modes [data-mode=chat]').hidden = c.kind !== 'claude'; $('#modes [data-mode=detail]').hidden = c.kind !== 'claude'; }
 function startWeb(c) {
   c.web = { state: '', pages: [], page: '', n: 0, z: 1 }; c.wpick = ''; $('#wimg').hidden = true; $('#wimg').removeAttribute('src'); $('#wimg').style.width = ''; drawWeb();
   const v = $('#wview'); send({ op: 'browser', name: c.name, page: '', width: Math.round(Math.min(1600, Math.max(360, v.clientWidth) * Math.min(3, window.devicePixelRatio || 1))) });
@@ -632,8 +650,8 @@ function drawRepos() {
     const bits = [r.changed ? `${r.changed} changed` : 'no changes', r.ahead ? `<span class="ahead">↑${r.ahead}</span>` : '', r.behind ? `↓${r.behind}` : '', ss.length ? `${ss.length} session${ss.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
     return `<article class="row${asks ? ' needs' : ''}" data-repo="${r.proj}|${esc(r.repo)}"><button class="open" type="button"><span class="t">${esc(r.repo === r.project ? r.project : `${r.project} / ${r.repo}`)}</span><span class="meta"><span class="chip">${esc(r.branch || 'no branch')}</span>${bits}</span>${asks ? '<span class="now"><span>A session is waiting for you</span></span>' : doing ? `<span class="now"><i class="spin"></i><span>${esc(doing.pk.busy ? doing.pk.now : 'Working')}</span></span>` : ''}</button></article>`; };
   const live = all.filter((x) => x.r.changed || x.ss.length); const quiet = all.filter((x) => !x.r.changed && !x.ss.length);
-  const html = (live.length ? `<div class="sect"><span>Changes and sessions</span><i>${live.length}</i></div>${live.map(row).join('')}` : '') + (quiet.length ? `<div class="sect"><span>Nothing changed</span><i>${quiet.length}</i></div>${quiet.map(row).join('')}` : '') || '<div class="gnote">No project here is a git repo.</div>';
-  if (el.dataset.sig !== html) { el.dataset.sig = html; el.innerHTML = html; }
+  const html = (live.length ? `<div class="sect"><span>Changes and sessions</span><i>${live.length}</i></div>${live.map(row).join('')}` : '') + (quiet.length ? `<div class="sect"><span>Nothing changed</span><i>${quiet.length}</i></div>${quiet.map(row).join('')}` : '') || '<div class="gnote">No project here is a git repo.</div>'; const tail = G.more ? `<div class="gnote" style="padding:18px 30px">Looking at ${G.more} more…</div>` : '';
+  if (el.dataset.sig !== html + tail) { el.dataset.sig = html + tail; el.innerHTML = html + tail; }
 }
 function openRepo(r) { G.cur = r; G.stack = [{ k: 'repo' }]; document.body.classList.add('gitting'); drawGit(true); $('#gbody').scrollTop = 0; gitAsk(); }
 function closeGit() { G.cur = null; G.stack = []; document.body.classList.remove('gitting'); if (G.tab === 'projects') send({ op: 'repos' }); }
@@ -803,6 +821,7 @@ document.addEventListener('click', (e) => {
   if (t.closest('[data-wpage]')) { const c = S.cur; if (c && c.mode === 'web') { c.wpick = t.closest('[data-wpage]').dataset.wpage; send({ op: 'browser', name: c.name, page: c.wpick }); drawWeb(); } return; }
   if (t.closest('#add')) { $('#nfind').value = ''; drawNew(); return sheet('#sheet-new'); }
   if (t.closest('#prefs')) { drawPrefs(); return sheet('#sheet-prefs'); }
+  if (t.closest('[data-more]')) { const o = t.closest('.m'); o.classList.toggle('open'); t.closest('[data-more]').textContent = o.classList.contains('open') ? 'show less' : `${$('pre', o).textContent.split('\n').length} lines · show all`; return; }
   if (t.closest('[data-home]')) return homeTab(t.closest('[data-home]').dataset.home);
   if (t.closest('#scanbtn')) return scan();
   if (t.closest('#scanstop')) return scanStop();

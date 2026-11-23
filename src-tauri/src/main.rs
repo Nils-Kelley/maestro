@@ -1216,7 +1216,7 @@ fn git_status(repo: String, cur: State<Cur>, window: tauri::WebviewWindow) -> Re
 }
 fn git_status_of(dir: &Path, repo: &str) -> Result<Value, String> {
     let started = std::time::Instant::now();
-    let out = git(&dir, &["status", "--porcelain=v2", "--branch", "--untracked-files=normal"])?;
+    let out = git(&dir, &["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"])?;
     let (mut branch, mut upstream, mut ahead, mut behind) = (String::new(), String::new(), 0i64, 0i64);
     let mut files: Vec<Value> = vec![];
     for ln in out.lines() {
@@ -2169,6 +2169,8 @@ fn remote_start() -> Result<u16, String> {
             }
         }
     });
+    // the repos are looked at once now, so that the first page to ask for them is answered at once
+    std::thread::spawn(|| { let (tx, _nobody) = std::sync::mpsc::channel(); remote_repos(&tx); });
     Ok(port)
 }
 fn remote_stop() {
@@ -2514,7 +2516,10 @@ fn file_tail(f: &Path, bytes: u64) -> String {
 }
 /// What was said in a conversation file, oldest first, as (id, role, text): role is "user", "assistant" or "tool" (one line
 /// saying what was done). Thinking, tool results, side conversations and the program's own notes are left out.
-fn chat_items(text: &str) -> Vec<(String, &'static str, String)> {
+fn chat_items(text: &str) -> Vec<(String, &'static str, String)> { chat_read(text, false) }
+/// The same, read one way or the other: as a conversation (what was said, and one line per step), or in `detail` (each step with
+/// all it was given and what came back, and the reasoning between them where the record holds any).
+fn chat_read(text: &str, detail: bool) -> Vec<(String, &'static str, String)> {
     let mut out = vec![];
     let clip = |t: &str, n: usize| -> String { let t = t.trim(); if t.chars().count() > n { format!("{}…", t.chars().take(n).collect::<String>()) } else { t.to_string() } };
     for line in text.lines() {
@@ -2525,11 +2530,27 @@ fn chat_items(text: &str) -> Vec<(String, &'static str, String)> {
         if o["isSidechain"].as_bool().unwrap_or(false) || o["isMeta"].as_bool().unwrap_or(false) { continue; }
         let Some(id) = o["uuid"].as_str() else { continue };
         let said = |t: &str| !t.trim().is_empty() && !(role == "user" && t.trim_start().starts_with('<'));
+        // what a step was given, laid out to be read: a command as it was typed, an edit as what went out and what came in
+        let given = |name: &str, input: &Value| -> String {
+            let t = |k: &str| input[k].as_str().unwrap_or("");
+            let body = if !t("command").is_empty() { t("command").to_string() }
+                else if !t("old_string").is_empty() || !t("new_string").is_empty() { format!("{}\n{}\n{}", t("file_path"), t("old_string").lines().map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n"), t("new_string").lines().map(|l| format!("+ {l}")).collect::<Vec<_>>().join("\n")) }
+                else if !t("content").is_empty() { format!("{}\n{}", t("file_path"), t("content")) }
+                else if input.as_object().map(|o| o.len() == 1).unwrap_or(false) { input.as_object().and_then(|o| o.values().next()).map(|v| v.as_str().map(|x| x.to_string()).unwrap_or_else(|| v.to_string())).unwrap_or_default() }
+                else { serde_json::to_string_pretty(input).unwrap_or_default() };
+            format!("{name}\n{}", clip(&body, 4000))
+        };
         match &o["message"]["content"] {
             Value::String(t) => if said(t) { out.push((id.to_string(), role, clip(t, 8000))); },
             Value::Array(blocks) => for (i, b) in blocks.iter().enumerate() {
                 match b["type"].as_str() {
                     Some("text") => { let t = b["text"].as_str().unwrap_or(""); if said(t) { out.push((format!("{id}-{i}"), role, clip(t, 8000))); } }
+                    Some("thinking") if detail => { let t = b["thinking"].as_str().unwrap_or(""); if !t.trim().is_empty() { out.push((format!("{id}-{i}"), "thinking", clip(t, 8000))); } }
+                    Some("tool_use") if role == "assistant" && detail => out.push((format!("{id}-{i}"), "tool", given(b["name"].as_str().unwrap_or("tool"), &b["input"]))),
+                    Some("tool_result") if detail => {
+                        let t = match &b["content"] { Value::String(t) => t.clone(), Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"), _ => String::new() };
+                        if !t.trim().is_empty() { out.push((format!("{id}-{i}"), if b["is_error"].as_bool().unwrap_or(false) { "failed" } else { "result" }, clip(&t, 4000))); }
+                    }
                     Some("tool_use") if role == "assistant" => {
                         let input = &b["input"];
                         let what = ["command", "file_path", "path", "pattern", "url", "query", "description", "prompt", "skill"].iter().find_map(|k| input[*k].as_str()).unwrap_or("");
@@ -2600,42 +2621,69 @@ fn chat_file(p: &Project, launcher: &str, name: &str) -> Option<PathBuf> {
     Some(found)
 }
 /// A session's conversation for a remote page: the last things said, or only those after `after` when the page has that one.
-fn remote_chat(name: &str, after: &str) -> Value {
+fn remote_chat(name: &str, after: &str, detail: bool) -> Value {
     let none = json!({ "op": "chat", "name": name, "found": false, "reset": true, "items": [] });
     if !ours(name) { return none; }
     let Some((p, launcher)) = remote_side().and_then(|p| launcher(&p).ok().map(|l| (p, l))) else { return none };
     let Some(file) = chat_file(&p, &launcher, name) else { return none };
-    let all = chat_items(&file_tail(&file, 900_000));
+    let all = chat_read(&file_tail(&file, if detail { 1_500_000 } else { 900_000 }), detail);
     let from = all.iter().position(|i| i.0 == after).map(|i| i + 1);
-    let items: Vec<Value> = all.iter().skip(from.unwrap_or(all.len().saturating_sub(60))).map(|(id, role, text)| json!({ "id": id, "role": role, "text": text })).collect();
+    let items: Vec<Value> = all.iter().skip(from.unwrap_or(all.len().saturating_sub(if detail { 150 } else { 60 }))).map(|(id, role, text)| json!({ "id": id, "role": role, "text": text })).collect();
     json!({ "op": "chat", "name": name, "found": true, "reset": from.is_none(), "items": items })
 }
 // ---- The repos of the projects, for a paired page: where each stands, what has changed in it, its last commits, and a diff.
 // The same git the Git screen asks, read only: nothing is staged, committed or pushed from a remote page.
 /// Every repo of every project with its branch, how far it is from its upstream and how many files have changed. Asked of
 /// all of them at once, and kept for a few seconds: a page asks again and again while it shows the list.
-fn remote_repos() -> Value {
-    static KEPT: Mutex<Option<(std::time::Instant, Value)>> = Mutex::new(None);
-    if let Some((at, v)) = KEPT.lock().ok().and_then(|k| k.clone()) { if at.elapsed() < std::time::Duration::from_secs(6) { return v; } }
+fn remote_repos(tx: &std::sync::mpsc::Sender<String>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static KEPT: Mutex<Option<(std::time::Instant, Vec<Value>)>> = Mutex::new(None);
+    static LOOKING: AtomicBool = AtomicBool::new(false);
+    let answer = |items: &[Value], more: usize| json!({ "op": "repos", "items": items, "more": more }).to_string();
+    // what was seen last is said at once, however old: looking again takes a while when the disk is cold
+    let kept = KEPT.lock().ok().and_then(|k| k.clone());
+    let fresh = kept.as_ref().map(|(at, _)| at.elapsed() < std::time::Duration::from_secs(8)).unwrap_or(false);
+    if let Some((_, items)) = &kept { if tx.send(answer(items, 0)).is_err() { return; } }
+    if fresh { return; }
+    if LOOKING.swap(true, Ordering::SeqCst) {
+        // someone is looking already: wait for what they find rather than ask git for all of it twice
+        let began = std::time::Instant::now();
+        while LOOKING.load(Ordering::SeqCst) && began.elapsed() < std::time::Duration::from_secs(90) { std::thread::sleep(std::time::Duration::from_millis(150)); }
+        if let Some((_, items)) = KEPT.lock().ok().and_then(|k| k.clone()) { let _ = tx.send(answer(&items, 0)); }
+        return;
+    }
     let n = config()["projects"].as_array().map(|a| a.len()).unwrap_or(0);
-    let asked: Vec<std::thread::JoinHandle<Vec<Value>>> = (0..n).map(|i| std::thread::spawn(move || {
-        let Ok(p) = project_at(i) else { return vec![] };
-        repo_list(&p).into_iter().filter_map(|(repo, dir)| {
-            let out = git(&dir, &["status", "--porcelain=v2", "--branch", "--untracked-files=normal"]).ok()?;
-            let (mut branch, mut ahead, mut behind, mut changed) = (String::new(), 0i64, 0i64, 0usize);
-            for ln in out.lines() {
-                if let Some(v) = ln.strip_prefix("# branch.head ") { branch = v.to_string(); }
-                else if let Some(v) = ln.strip_prefix("# branch.ab ") { let mut it = v.split(' '); ahead = it.next().unwrap_or("+0").trim_start_matches('+').parse().unwrap_or(0); behind = it.next().unwrap_or("-0").trim_start_matches('-').parse().unwrap_or(0); }
-                else if !ln.starts_with('#') && !ln.trim().is_empty() { changed += 1; }
-            }
-            let folder = dir.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-            Some(json!({ "proj": i, "project": p.name, "repo": repo, "folder": folder, "branch": branch, "ahead": ahead, "behind": behind, "changed": changed }))
-        }).collect()
-    })).collect();
-    let items: Vec<Value> = asked.into_iter().flat_map(|t| t.join().unwrap_or_default()).collect();
-    let v = json!({ "op": "repos", "items": items });
-    if let Ok(mut k) = KEPT.lock() { *k = Some((std::time::Instant::now(), v.clone())); }
-    v
+    let (found, each) = std::sync::mpsc::channel::<(usize, Vec<Value>)>();
+    for i in 0..n {
+        let found = found.clone();
+        std::thread::spawn(move || {
+            let items = project_at(i).map(|p| repo_list(&p).into_iter().filter_map(|(repo, dir)| {
+                let out = git(&dir, &["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"]).ok()?;
+                let (mut branch, mut ahead, mut behind, mut changed) = (String::new(), 0i64, 0i64, 0usize);
+                for ln in out.lines() {
+                    if let Some(v) = ln.strip_prefix("# branch.head ") { branch = v.to_string(); }
+                    else if let Some(v) = ln.strip_prefix("# branch.ab ") { let mut it = v.split(' '); ahead = it.next().unwrap_or("+0").trim_start_matches('+').parse().unwrap_or(0); behind = it.next().unwrap_or("-0").trim_start_matches('-').parse().unwrap_or(0); }
+                    else if !ln.starts_with('#') && !ln.trim().is_empty() { changed += 1; }
+                }
+                let folder = dir.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                Some(json!({ "proj": i, "project": p.name, "repo": repo, "folder": folder, "branch": branch, "ahead": ahead, "behind": behind, "changed": changed }))
+            }).collect()).unwrap_or_default();
+            let _ = found.send((i, items));
+        });
+    }
+    drop(found);
+    // the first time there is nothing to show yet: the repos are shown as they come in, the quick ones first
+    let (mut got, mut done, mut said) = (Vec::<(usize, Vec<Value>)>::new(), 0usize, std::time::Instant::now());
+    let flat = |got: &[(usize, Vec<Value>)]| { let mut g: Vec<&(usize, Vec<Value>)> = got.iter().collect(); g.sort_by_key(|x| x.0); g.into_iter().flat_map(|x| x.1.clone()).collect::<Vec<Value>>() };
+    while let Ok(one) = each.recv() {
+        got.push(one);
+        done += 1;
+        if kept.is_none() && done < n && said.elapsed() > std::time::Duration::from_millis(350) { said = std::time::Instant::now(); let _ = tx.send(answer(&flat(&got), n - done)); }
+    }
+    let items = flat(&got);
+    if let Ok(mut k) = KEPT.lock() { *k = Some((std::time::Instant::now(), items.clone())); }
+    LOOKING.store(false, Ordering::SeqCst);
+    let _ = tx.send(answer(&items, 0));
 }
 /// One thing asked about one repo: `repo` (its changed files and last commits), `commit` (the files of one), `diff`.
 fn remote_git(m: &Value) -> Value {
@@ -2645,7 +2693,10 @@ fn remote_git(m: &Value) -> Value {
         let i = m["proj"].as_u64().map(|i| i as usize).filter(|i| *i < config()["projects"].as_array().map(|a| a.len()).unwrap_or(0)).ok_or("that project is not in the list")?;
         let dir = repo_dir(&project_at(i)?, repo)?;
         match op {
-            "repo" => Ok(json!({ "status": git_status_of(&dir, repo)?, "log": git_log_of(&dir, 0, 25).unwrap_or(json!([])) })),
+            "repo" => {
+                let (status, log) = std::thread::scope(|s| { let log = s.spawn(|| git_log_of(&dir, 0, 25).unwrap_or(json!([]))); (git_status_of(&dir, repo), log.join().unwrap_or(json!([]))) });
+                Ok(json!({ "status": status?, "log": log }))
+            }
             "commit" => Ok(json!({ "commit": git_commit_of(&dir, s("sha"))? })),
             "diff" => Ok(json!({ "diff": git_diff_of(&dir, s("kind"), s("path"), m["sha"].as_str())?, "kind": s("kind"), "path": s("path"), "sha": s("sha") })),
             _ => Err("not something a repo is asked".into()),
@@ -2804,7 +2855,7 @@ fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, ter
         }
         "repos" => {
             let tx = tx.clone();
-            std::thread::spawn(move || { let _ = tx.send(remote_repos().to_string()); });
+            std::thread::spawn(move || remote_repos(&tx));
         }
         "repo" | "commit" | "diff" => {
             let (tx, m) = (tx.clone(), m.clone());
@@ -2814,8 +2865,8 @@ fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, ter
             if let Some(w) = watching.lock().ok().and_then(|h| h.clone()) { w.seen.fetch_max(m["n"].as_u64().unwrap_or(0), std::sync::atomic::Ordering::Relaxed); }
         }
         "chat" => {
-            let (tx, name, after) = (tx.clone(), s("name"), s("after"));
-            std::thread::spawn(move || { let _ = tx.send(remote_chat(&name, &after).to_string()); });
+            let (tx, name, after, detail) = (tx.clone(), s("name"), s("after"), m["detail"].as_bool().unwrap_or(false));
+            std::thread::spawn(move || { let mut v = remote_chat(&name, &after, detail); v["detail"] = json!(detail); let _ = tx.send(v.to_string()); });
         }
         "open" | "new" => {
             let id = s("id");
@@ -3402,6 +3453,10 @@ mod tests {
         let items = chat_items(&file);
         assert_eq!(items.iter().map(|i| (i.0.as_str(), i.1, i.2.as_str())).collect::<Vec<_>>(), vec![
             ("u1", "user", "Redraw the tide curve from at most 288 points"), ("a1-1", "assistant", "I will **smooth** it."), ("a1-2", "tool", "Bash npm test -- TideChart"),
+        ]);
+        // in detail: the reasoning the record holds, what the step was given, and what came back
+        assert_eq!(chat_read(&file, true).iter().map(|i| (i.0.as_str(), i.1, i.2.as_str())).collect::<Vec<_>>(), vec![
+            ("u1", "user", "Redraw the tide curve from at most 288 points"), ("a1-0", "thinking", "hm"), ("a1-1", "assistant", "I will **smooth** it."), ("a1-2", "tool", "Bash\nnpm test -- TideChart"), ("u3-0", "result", "14 passed"),
         ]);
         let screen = squeeze("> Redraw the tide curve from at\n  most 288 points\n● I will smooth it.");
         assert_eq!(chat_fit(&items, &screen), 2); // the question, wrapped by the terminal, and the answer without its marks

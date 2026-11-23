@@ -24,6 +24,7 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
   commits, and diffs to read on a phone. Read only.
 - A page that is not paired scans the pairing code itself, and `> Pair a phone` shows one.
 - The home screen has an **On your phone** panel: turn remote access on and pair a phone from there.
+- Remote access has a Detail view of a session: every step with what it was given and what came back.
 - A phone pairs by typing six digits shown on the computer. The digits stand for five tries; the picture and the link still work.
 - Console tabs can be put in any order: drag a tab to another slot, or press `Ctrl+Shift+PageUp` / `PageDown` to move the
   session you are in. The tiles and the `Alt+1`…`9` numbers follow, and sessions that outlive the app come back in that order.

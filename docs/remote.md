@@ -31,6 +31,9 @@ cannot connect, look for another firewall or security product on the computer th
 - **Open a session as a full terminal.** On a phone there is a row of keys (`esc`, `tab`, `ctrl`, arrows, page up and down) and
   a message line that uses the phone's own keyboard, dictation included. A message of several lines goes in as one paste. A
   finger moved over the terminal scrolls it. The `···` button sets the text size and ends the session.
+- **Read a session in detail.** Beside Chat, Detail shows every step with all it was given (the command, the edit) and what
+  came back, as it happens. It is read from the record Claude Code keeps, so the session is not slowed or changed by being
+  watched. Reasoning is shown where that record holds it; for most models it holds none.
 - **Start a session**: Claude Code with a first message, or a shell, in any project that keeps its sessions running.
 - **Look at the projects.** Projects lists every repo with its branch, how many files have changed and which sessions are at
   work in it. A repo opens to its changed files and last commits, and a file to its diff, which follows the file as a session
