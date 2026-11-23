@@ -5,6 +5,8 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-22
+
 ### Added
 - Remote access: your running sessions on a phone or another computer, over your own Tailscale network. A card per session
   with its last lines, one-tap answers and a reply line, and each session as a full terminal with a row of keys for a phone.
