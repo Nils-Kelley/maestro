@@ -6,8 +6,10 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 ## [Unreleased]
 
 ### Added
-- Dark screens: a button beside the pin (and `> Dark screens`) covers every display in black and keeps the computer awake,
-  so sessions go on and a phone still reaches them. A key or a click brings the screens back; moving the mouse does not.
+- Dark screens: a button beside the pin, `> Dark screens`, a key (`Ctrl+Alt+D`, or `darkHotkey`) or a paired phone switches
+  every display off and keeps the computer awake, so sessions go on and a phone still reaches them. A key or a click brings
+  the screens back; moving the mouse does not.
+- A release has a name of its own (0.4.1.1) beside the three numbers Cargo builds.
 
 ## [0.4.1] - 2026-11-23
 

@@ -45,8 +45,10 @@ Thanks for looking. Maestro is small on purpose: one Rust file, one page. Change
 
 ## Releasing (maintainers)
 
-1. Set the new version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, and add its section to `CHANGELOG.md`.
-2. Commit, then tag it: `git tag v0.3.0 && git push origin main v0.3.0`.
+1. Name the release in `src-tauri/Cargo.toml` (`shown` under `[package.metadata.maestro]`, for example `0.4.1.1`) and add its
+   section to `CHANGELOG.md`. Cargo takes three numbers only: raise `version` there and in `src-tauri/tauri.conf.json` by one
+   as well. The name is what the app shows and what its update check compares.
+2. Commit, then tag the name: `git tag v0.4.1.1 && git push origin main v0.4.1.1`.
 3. The Release workflow builds each system's archive and attaches all four to one **draft** release. Check it, paste the
    changelog section as the notes, and publish. Only a published release is seen by the app's update check, and the archives
    must keep their names (`maestro-windows-x64.zip`, `maestro-linux-x64.tar.gz`, `maestro-macos-arm64.tar.gz`, `maestro-macos-x64.tar.gz`).

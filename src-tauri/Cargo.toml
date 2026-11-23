@@ -1,8 +1,13 @@
 [package]
 name = "maestro"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "Maestro: your agents and their harness, in one place"
+
+# What this release is called: the tag (v0.4.1.1), what the app says it is, and what its update check compares.
+# Cargo takes three numbers only, so `version` above goes up by one with each release and this says the name.
+[package.metadata.maestro]
+shown = "0.4.1.1"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -9,12 +9,15 @@
 </head>
 <body>
 <script>
-// One of these covers each display in black. Sessions go on working behind it and the computer is kept awake. A key or a click
-// brings the screens back; moving the mouse does not, so a nudged desk leaves them dark.
+// One of these covers each display in black, and the displays are switched off under it. Sessions go on working and the
+// computer is kept awake. A key or a click brings the screens back. Moving the mouse does not: it lights the displays, as it
+// would after any idle time, they stay black, and once the mouse has settled they are switched off again.
 const began = Date.now();
 const back = (e) => { if (e) e.preventDefault(); if (Date.now() - began < 500) return; window.__TAURI__.core.invoke('blackout_end').catch(() => {}); };
 for (const ev of ['keydown', 'mousedown', 'touchstart']) addEventListener(ev, back, { passive: false });
 addEventListener('contextmenu', (e) => e.preventDefault());
+let settled = 0;
+addEventListener('mousemove', () => { if (Date.now() - began < 2500) return; clearTimeout(settled); settled = setTimeout(() => window.__TAURI__.core.invoke('blackout_dim').catch(() => {}), 2500); });
 </script>
 </body>
 </html>

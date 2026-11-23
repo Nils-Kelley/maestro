@@ -370,7 +370,7 @@ fn load(cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, String> 
             "empty": true, "project": { "name": "", "root": "", "dir": ".claude", "instructions": "CLAUDE.md", "native": false, "kit": false },
             "limit": 120000, "sizes": { "projClaude": 0, "userClaude": 0, "memoryIndex": 0 }, "rules": [], "memories": [], "log": [],
             "ledger": { "total": 0, "status": {}, "repos": {} }, "sessions": { "drafts": 0, "live": 0, "abandoned": 0, "recent": [], "past": [] },
-            "registry": [], "skills": [], "hooks": [], "audits": [], "probes": null, "hot": [], "hotkey": config()["hotkey"],
+            "registry": [], "skills": [], "hooks": [], "audits": [], "probes": null, "hot": [], "hotkey": config()["hotkey"], "darkHotkey": dark_key_name(),
         }));
     }
     let p = project(&cur, &window)?;
@@ -528,7 +528,7 @@ fn load(cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, String> 
         "ledger": { "total": total, "status": status, "repos": heads["repos"] },
         "sessions": { "drafts": drafts, "live": live, "abandoned": abandoned, "recent": recent, "past": past },
         "registry": registry, "skills": skills, "hooks": hooks, "audits": audits,
-        "probes": probes, "hot": hot, "hotkey": config()["hotkey"],
+        "probes": probes, "hot": hot, "hotkey": config()["hotkey"], "darkHotkey": dark_key_name(),
     }))
 }
 
@@ -1367,7 +1367,7 @@ fn latest_release() -> Result<Value, String> {
     let tag = r["tag_name"].as_str().ok_or("GitHub's answer names no release")?.to_string();
     let want = format!("https://github.com/{REPO}/releases/download/");
     let asset = r["assets"].as_array().and_then(|a| a.iter().find(|x| x["name"] == ASSET)).and_then(|x| x["browser_download_url"].as_str()).filter(|u| u.starts_with(&want)).map(|u| u.to_string());
-    let current = env!("CARGO_PKG_VERSION");
+    let current = env!("MAESTRO_VERSION");
     Ok(json!({ "current": current, "latest": tag.trim_start_matches('v'), "tag": tag, "newer": newer(&tag, current), "notes": r["body"].as_str().unwrap_or("").chars().take(6000).collect::<String>(), "published": r["published_at"], "asset": asset }))
 }
 /// Ask GitHub whether a newer release has been published. This is the app's only network request, and it is made only here.
@@ -1380,7 +1380,7 @@ fn update_check() -> Result<Value, String> {
 /// What this build is, without asking anyone.
 #[tauri::command]
 fn update_state() -> Value {
-    json!({ "platform": PLATFORM, "current": env!("CARGO_PKG_VERSION"), "auto": config()["checkUpdates"].as_bool().unwrap_or(false), "repo": REPO })
+    json!({ "platform": PLATFORM, "current": env!("MAESTRO_VERSION"), "auto": config()["checkUpdates"].as_bool().unwrap_or(false), "repo": REPO })
 }
 /// Check at start, or only when asked (the default).
 #[tauri::command]
@@ -1803,15 +1803,34 @@ fn stay_awake() {
         while DARK.load(Ordering::Relaxed) { std::thread::sleep(std::time::Duration::from_millis(300)); }
     });
 }
-#[tauri::command]
-async fn blackout(app: tauri::AppHandle) -> Result<(), String> {
+/// The displays themselves, switched off or woken. Off is what the system does when it has been idle; a display wakes at the
+/// next key, click or movement, so the black windows stay under it and it is switched off again when the mouse has settled.
+/// Woken from here (a phone asked, nobody touched the computer) by the smallest movement of the pointer, there and back.
+fn panels(off: bool) {
+    #[cfg(windows)]
+    {
+        #[link(name = "user32")]
+        extern "system" {
+            fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
+            fn mouse_event(flags: u32, dx: i32, dy: i32, data: u32, extra: usize);
+        }
+        // to every top-level window, the system's own "monitor power" request: 2 is off
+        if off { unsafe { PostMessageW(0xFFFF, 0x0112, 0xF170, 2); } }
+        else { unsafe { mouse_event(0x0001, 1, 0, 0, 0); mouse_event(0x0001, -1, 0, 0, 0); } }
+    }
+    #[cfg(target_os = "macos")]
+    { let _ = if off { std::process::Command::new("pmset").arg("displaysleepnow").status() } else { std::process::Command::new("caffeinate").args(["-u", "-t", "2"]).status() }; }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    { let _ = std::process::Command::new("xset").args(["dpms", "force", if off { "off" } else { "on" }]).status(); }
+}
+fn dark_on(app: &tauri::AppHandle) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     if DARK.swap(true, Ordering::SeqCst) { return Ok(()); }
     let screens = app.available_monitors().map_err(|e| e.to_string()).inspect_err(|_| DARK.store(false, Ordering::SeqCst))?;
     let mut made = 0;
     for (i, m) in screens.iter().enumerate() {
         let (at, size, scale) = (m.position(), m.size(), m.scale_factor().max(0.1));
-        let w = tauri::WebviewWindowBuilder::new(&app, format!("black-{i}"), tauri::WebviewUrl::App("black.html".into()))
+        let w = tauri::WebviewWindowBuilder::new(app, format!("black-{i}"), tauri::WebviewUrl::App("black.html".into()))
             .title("Maestro")
             .decorations(false)
             .resizable(false)
@@ -1832,13 +1851,27 @@ async fn blackout(app: tauri::AppHandle) -> Result<(), String> {
     }
     if made == 0 { DARK.store(false, Ordering::SeqCst); return Err("no display could be covered".into()); }
     stay_awake();
+    // the key or the click that asked for the dark is still on its way up: the displays go off a moment after it
+    std::thread::spawn(|| { std::thread::sleep(std::time::Duration::from_millis(1500)); if DARK.load(Ordering::SeqCst) { panels(true); } });
     Ok(())
 }
-#[tauri::command]
-fn blackout_end(app: tauri::AppHandle) {
-    DARK.store(false, std::sync::atomic::Ordering::SeqCst);
+/// The screens come back. `wake` when nobody touched the computer to ask for it (a phone did): the displays are woken too.
+fn dark_off(app: &tauri::AppHandle, wake: bool) {
+    let was = DARK.swap(false, std::sync::atomic::Ordering::SeqCst);
     for (label, w) in app.webview_windows() { if label.starts_with("black-") { let _ = w.close(); } }
+    if was && wake { panels(false); }
 }
+#[tauri::command]
+async fn blackout(app: tauri::AppHandle) -> Result<(), String> { dark_on(&app) }
+#[tauri::command]
+fn blackout_end(app: tauri::AppHandle) { dark_off(&app, false) }
+/// The mouse was moved while the screens are dark and has come to rest: the displays, lit by it, go off again.
+#[tauri::command]
+fn blackout_dim() { if DARK.load(std::sync::atomic::Ordering::SeqCst) { panels(true); } }
+/// The key that makes the screens dark, and brings them back: "darkHotkey" in maestro.config.json.
+static DARK_KEY: std::sync::OnceLock<Shortcut> = std::sync::OnceLock::new();
+const DARK_KEY_DEFAULT: &str = "Ctrl+Alt+D";
+fn dark_key_name() -> String { config()["darkHotkey"].as_str().map(|k| k.to_string()).unwrap_or_else(|| DARK_KEY_DEFAULT.to_string()) }
 /// Give one of the app's views (Git, Memory, the Console…) a window of its own, showing the project the asking window shows.
 /// It is an ordinary window: it can be resized, put on another screen, and covered by other windows.
 #[tauri::command]
@@ -2321,7 +2354,7 @@ fn remote_conn(mut s: std::net::TcpStream, peer: std::net::IpAddr, stop: &std::s
         return;
     };
     let vapid = { use base64::Engine; vapid_key().ok().map(|k| b64u().encode(public_bytes(&k))) };
-    if !send(&mut ws, json!({ "op": "hello", "host": host_name(), "version": env!("CARGO_PKG_VERSION"), "device": name, "token": fresh, "vapid": vapid }).to_string()) { return; }
+    if !send(&mut ws, json!({ "op": "hello", "host": host_name(), "version": env!("MAESTRO_VERSION"), "device": name, "token": fresh, "vapid": vapid }).to_string()) { return; }
     static CONNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let conn = CONNS.fetch_add(1, Ordering::Relaxed);
     let cut = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2384,7 +2417,8 @@ fn remote_list() -> Value {
             sessions.push(json!({ "name": f[0], "created": f[1].parse::<i64>().unwrap_or(0), "kind": if f[2].is_empty() { "ubuntu" } else { f[2] }, "label": f[3], "project": f[4].rsplit('/').next().unwrap_or(""), "screen": screen_of(f[0]), "proj": folders.iter().find(|(_, d)| d == f[4].trim_end_matches('/')).map(|(i, _)| *i), "browser": browsers.lines().any(|b| b.split('\t').next() == Some(f[0])) }));
         }
     }
-    json!({ "op": "list", "projects": projects, "sessions": sessions })
+    // (the screens can be made dark from a page only where there is a window to do it: not under `maestro --remote`)
+    json!({ "op": "list", "projects": projects, "sessions": sessions, "dark": DARK.load(std::sync::atomic::Ordering::SeqCst), "canDark": REMOTE_APP.get().is_some() })
 }
 // ---- Notifications to a paired device (Web Push): a page that was allowed them is told when a session starts waiting or
 // finishes, while the page is closed. The message is encrypted for that one browser; the service that carries it (Apple's,
@@ -2920,6 +2954,17 @@ fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, ter
             let (tx, width) = (tx.clone(), m["width"].as_u64().unwrap_or(1200).clamp(320, 2000) as u32);
             std::thread::spawn(move || browser_watch(width, w, tx));
         }
+        "dark" => {
+            let (tx, on) = (tx.clone(), m["on"].as_bool().unwrap_or(false));
+            std::thread::spawn(move || {
+                match REMOTE_APP.get() {
+                    Some(app) if on => { if let Err(e) = dark_on(app) { let _ = tx.send(json!({ "op": "err", "text": e }).to_string()); } }
+                    Some(app) => dark_off(app, true),
+                    None => { let _ = tx.send(json!({ "op": "err", "text": "the screens can be made dark only where Maestro runs with its window" }).to_string()); }
+                }
+                let _ = tx.send(remote_list().to_string());
+            });
+        }
         "repos" => {
             let tx = tx.clone();
             std::thread::spawn(move || remote_repos(&tx));
@@ -3154,9 +3199,13 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
-                        toggle(app);
+                        if DARK_KEY.get() == Some(shortcut) {
+                            if DARK.load(std::sync::atomic::Ordering::SeqCst) { dark_off(app, false) } else if let Err(e) = dark_on(app) { note(format!("the screens could not be made dark: {e}")); }
+                        } else {
+                            toggle(app);
+                        }
                     }
                 })
                 .build(),
@@ -3173,6 +3222,16 @@ fn main() {
             };
             if let Err(e) = app.global_shortcut().register(key) {
                 note(format!("the key {shown} could not be registered ({e}): use the tray icon, or name another key as \"hotkey\" in maestro.config.json"));
+            }
+
+            // and the key for dark screens ("darkHotkey"; an empty name means none)
+            let dark = dark_key_name();
+            if !dark.trim().is_empty() {
+                match dark.parse::<Shortcut>() {
+                    Ok(k) if k != key => { if let Err(e) = app.global_shortcut().register(k) { note(format!("the key {dark} could not be registered ({e}): name another as \"darkHotkey\" in maestro.config.json")); } else { let _ = DARK_KEY.set(k); } }
+                    Ok(_) => note(format!("\"darkHotkey\" is the same key as \"hotkey\" ({dark}): it is left to showing the window")),
+                    Err(_) => note(format!("\"darkHotkey\" ({dark}) is not a key this can read")),
+                }
             }
 
             let show = MenuItem::with_id(app, "show", format!("Show Maestro    {shown}"), true, None::<&str>)?;
@@ -3211,7 +3270,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            blackout, blackout_end, load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_allow, remote_secure,
+            blackout, blackout_end, blackout_dim, load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_allow, remote_secure,
         ])
         .run(tauri::generate_context!())
         .expect("Maestro could not start");

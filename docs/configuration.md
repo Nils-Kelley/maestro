@@ -12,6 +12,7 @@ Maestro keeps one file, `maestro.config.json`. The app writes it; you rarely edi
 | Field | Meaning |
 | --- | --- |
 | `hotkey` | The key that shows and hides the window, for example `Ctrl+Shift+Space` or `Alt+Space`. Read at start. |
+| `darkHotkey` | The key that makes the screens dark and brings them back. `Ctrl+Alt+D` when absent; `""` for none. Read at start. |
 | `checkUpdates` | `true` to ask GitHub for the latest release at each start. Off unless you turn it on. |
 | `remote.on`, `port` | [Remote access](remote.md): whether it is on, and the port it listens on (4747). |
 | `remote.page` | For work on the remote page only: a file to serve in place of the built-in page. Leave it out otherwise. |

@@ -317,6 +317,8 @@ body.gitting #home { transform: translateX(-25%); }
     <div class="bar"><button type="button" aria-hidden="true" tabindex="-1"></button><h3>This device</h3><button class="do" type="button" data-close>Done</button></div>
     <div class="box"><button class="line act" type="button" id="pushbtn"></button></div>
     <p class="foot" id="pushnote"></p>
+    <div id="darkbox" hidden><div class="box" style="margin-top:18px"><button class="line act" type="button" id="darkbtn"></button></div>
+    <p class="foot">The computer’s displays are switched off and it is kept awake: the sessions go on, and stay reachable from here.</p></div>
     <div class="box" style="margin-top:18px"><button class="line act danger" type="button" id="unpair">Unpair this device</button></div>
   </div>
 </div>
@@ -367,7 +369,7 @@ function connect() {
 function heard(m) {
   if (m.op === 'hello') { if (m.token) { S.token = m.token; store.set('maestro-token', m.token); } S.pair = ''; S.vapid = m.vapid || ''; S.up = true; S.tries = 0; link('on'); $('#host').textContent = m.host || ''; send({ op: 'list' }); if (S.cur) resume(); return; }
   if (m.op === 'denied') { const paired = !!S.token && !S.pair; S.token = ''; S.pair = ''; store.set('maestro-token', null); S.ws.close(); return showPair(paired ? 'This device is no longer paired with the computer.' : 'That code is not right, or it has run out. Check it on the computer, or make a new one there.'); }
-  if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.loaded = true; drawRows(); webOffer(); if (G.tab === 'projects') drawRepos(); if (G.cur && gitTop().k === 'repo') drawGit(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
+  if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.dark = !!m.dark; S.canDark = !!m.canDark; drawDark(); S.loaded = true; drawRows(); webOffer(); if (G.tab === 'projects') drawRepos(); if (G.cur && gitTop().k === 'repo') drawGit(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
   if (m.op === 'chat') return heardChat(m);
   if (m.op === 'browser' || m.op === 'frame') return heardWeb(m);
   if (m.op === 'repos') { G.repos = m.items || []; G.more = m.more || 0; G.loaded = G.repos.length > 0 || !G.more; if (S.cur && S.cur.mode === 'git' && !G.cur && !G.more) startSGit(S.cur); return drawRepos(); }
@@ -818,7 +820,9 @@ const standalone = () => matchMedia('(display-mode: standalone)').matches || nav
 const pushable = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && isSecureContext;
 const b64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (ch) => ch.charCodeAt(0));
 async function pushState() { if (!pushable()) return 'no'; try { const reg = await navigator.serviceWorker.getRegistration(); const sub = reg && await reg.pushManager.getSubscription(); return sub && Notification.permission === 'granted' ? 'on' : 'off'; } catch (_) { return 'off'; } }
-async function drawPrefs() {
+// the computer's screens, dark or not: said and changed from the sheet of this device
+function drawDark() { $('#darkbox').hidden = !S.canDark; $('#darkbtn').textContent = S.dark ? 'Bring the computer’s screens back' : 'Make the computer’s screens dark'; }
+async function drawPrefs() { drawDark();
   const st = await pushState(); const b = $('#pushbtn'); const note = $('#pushnote'); b.dataset.st = st;
   b.textContent = st === 'on' ? 'Turn notifications off' : 'Turn notifications on'; b.classList.toggle('danger', st === 'on'); b.disabled = st === 'no' || !S.vapid;
   b.style.opacity = b.disabled ? 0.4 : 1;
@@ -855,6 +859,7 @@ document.addEventListener('click', (e) => {
   if (t.closest('[data-mode]')) { const m = t.closest('[data-mode]').dataset.mode; if (m === 'chat' || m === 'detail') store.set('maestro-mode', m); if (S.cur) S.cur.toChat = false; return setMode(m); }
   if (t.closest('[data-wpage]')) { const c = S.cur; if (c && c.mode === 'web') { c.wpick = t.closest('[data-wpage]').dataset.wpage; send({ op: 'browser', name: c.name, page: c.wpick }); drawWeb(); } return; }
   if (t.closest('#add')) { $('#nfind').value = ''; drawNew(); return sheet('#sheet-new'); }
+  if (t.closest('#darkbtn')) { const on = !S.dark; if (send({ op: 'dark', on })) { S.dark = on; drawDark(); buzz(10); say(on ? 'The computer’s screens are going dark' : 'The computer’s screens are coming back'); } return; }
   if (t.closest('#prefs')) { drawPrefs(); return sheet('#sheet-prefs'); }
   if (t.closest('[data-more]')) { const o = t.closest('.m'); o.classList.toggle('open'); t.closest('[data-more]').textContent = o.classList.contains('open') ? 'show less' : `${$('pre', o).textContent.split('\n').length} lines · show all`; return; }
   if (t.closest('[data-home]')) return homeTab(t.closest('[data-home]').dataset.home);
