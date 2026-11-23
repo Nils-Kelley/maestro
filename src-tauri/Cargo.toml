@@ -15,6 +15,16 @@ tauri-plugin-dialog = "2"
 portable-pty = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# remote access: the WebSocket, random codes and tokens, the hash kept of a token, the code a phone scans
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+getrandom = "0.3"
+sha2 = "0.10"
+base64 = "0.22"
+# notifications to a paired device (Web Push): the key agreement, the signature, the sealing
+p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
+hkdf = "0.12"
+aes-gcm = "0.10"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [profile.dev]
 opt-level = 1

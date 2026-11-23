@@ -13,6 +13,9 @@ Maestro keeps one file, `maestro.config.json`. The app writes it; you rarely edi
 | --- | --- |
 | `hotkey` | The key that shows and hides the window, for example `Ctrl+Shift+Space` or `Alt+Space`. Read at start. |
 | `checkUpdates` | `true` to ask GitHub for the latest release at each start. Off unless you turn it on. |
+| `remote.on`, `port` | [Remote access](remote.md): whether it is on, and the port it listens on (4747). |
+| `remote.page` | For work on the remote page only: a file to serve in place of the built-in page. Leave it out otherwise. |
+| `remote.devices[]` | The paired devices: a name, when each was paired and last seen, and the SHA-256 of its token (never the token). Written by the app. |
 | `projects[].name`, `root` | The name shown and the folder, as Windows opens it |
 | `projects[].runs` | Where this project's agent runs: `wsl` or `windows` on Windows, `native` on macOS and Linux |
 | `projects[].wslRoot`, `distro` | The folder as WSL sees it, and the distro (WSL projects) |
@@ -32,7 +35,7 @@ On disk, only this:
 - A memory, skill or rule when you save an edit. The first copy of a changed file each day is kept in `<harness>/archive/`
   (skills: `~/.claude/backups/`). A retired rule is kept in `<harness>/archive/retired-laws.md`.
 - The starter harness, when you ask for it: missing files only, nothing is replaced.
-- `term.sh` and `tmux.conf` in `~/.local/share/maestro/` (on Windows inside the WSL distro), the first time a session is
+- `term.sh`, `tmux.conf` and `playwright.json` in `~/.local/share/maestro/` (on Windows inside the WSL distro), the first time a session is
   opened. See [wsl/README.md](../wsl/README.md).
 - A new copy of the program, when you install an update. The one it replaces is kept beside it with `.old` added until the
   next start.
@@ -44,8 +47,11 @@ is displayed.
 
 ## Network
 
-There is no server, no port and no telemetry. The interface talks to the Rust side over the window's own IPC.
+There is no telemetry. The interface talks to the Rust side over the window's own IPC.
 
-The only request Maestro makes is the update check: one question to GitHub's public API, made when you open the Updates screen,
+Nothing listens on the network unless you turn [remote access](remote.md) on. It then answers only what arrives over your
+Tailscale network, and only devices you have paired.
+
+The only request Maestro makes on its own is the update check: one question to GitHub's public API, made when you open the Updates screen,
 or at start if you turned `checkUpdates` on. An update is downloaded over HTTPS from this repository's releases and is not
 signed.

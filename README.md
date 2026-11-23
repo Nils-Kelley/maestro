@@ -19,6 +19,7 @@
   <a href="#install">Install</a> ·
   <a href="docs/keys.md">Keys</a> ·
   <a href="docs/configuration.md">Configuration</a> ·
+  <a href="docs/remote.md">Remote</a> ·
   <a href="docs/harness.md">What it reads</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
@@ -27,7 +28,7 @@
 
 Native on Windows, macOS and Linux (Rust, Tauri 2). Press `Ctrl+Shift+Space` anywhere and it is there.
 
-No server, no port, no telemetry. Nothing in a project changes until you save an edit.
+No telemetry, and nothing listens on the network unless you turn remote access on. Nothing in a project changes until you save an edit.
 
 ## Sessions
 
@@ -38,6 +39,9 @@ question, the answers are buttons on the card. Tile 1, 2, 4 or 6 sessions, or gi
 
 With `tmux` installed, sessions keep running when Maestro closes and come back with their scroll-back. On Windows that
 means sessions inside WSL; PowerShell and native Windows sessions end with the app.
+
+Away from the computer, [remote access](docs/remote.md) puts the same cards and terminals on your phone or another
+computer, over your own Tailscale network. It is off until you turn it on.
 
 ![The home screen: a line to give a task, a card per session with its last lines, the answers it is waiting for and a reply box](docs/img/home.png)
 

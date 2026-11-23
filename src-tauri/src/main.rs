@@ -150,6 +150,12 @@ fn project(cur: &State<Cur>, window: &tauri::WebviewWindow) -> Result<Project, S
     let i = cur_of(cur, window);
     project_at(i)
 }
+/// Whether a project of maestro.config.json has its agent on Windows itself. "native" is a Windows matter (no WSL in between);
+/// on macOS and Linux every project is simply on this machine.
+fn runs_direct(p: &Value) -> bool {
+    let s = |k: &str| p[k].as_str().unwrap_or("");
+    cfg!(windows) && (s("runs") == "windows" || s("runs") == "native" || s("wslRoot").is_empty())
+}
 /// The project at one place in the list (a session belongs to its project, whichever one the window is showing).
 fn project_at(i: usize) -> Result<Project, String> {
     let c = config();
@@ -157,8 +163,7 @@ fn project_at(i: usize) -> Result<Project, String> {
     let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
     let root = PathBuf::from(s("root"));
     let dot = dot_of(&root);
-    // "native" is a Windows matter (no WSL in between); on macOS and Linux every project is simply on this machine
-    Ok(Project { name: s("name"), native: cfg!(windows) && (s("runs") == "windows" || s("runs") == "native" || s("wslRoot").is_empty()), instructions: instructions_of(&root, &dot), dot, root, claude_home: PathBuf::from(s("claudeHome")), memory: PathBuf::from(s("memoryDir")), wsl_root: s("wslRoot"), kit: s("kit"), audits: p["audits"].as_array().cloned().unwrap_or_default().iter().filter_map(|a| a.as_str().map(PathBuf::from)).collect(), distro: if s("distro").is_empty() { "Ubuntu".into() } else { s("distro") } })
+    Ok(Project { name: s("name"), native: runs_direct(p), instructions: instructions_of(&root, &dot), dot, root, claude_home: PathBuf::from(s("claudeHome")), memory: PathBuf::from(s("memoryDir")), wsl_root: s("wslRoot"), kit: s("kit"), audits: p["audits"].as_array().cloned().unwrap_or_default().iter().filter_map(|a| a.as_str().map(PathBuf::from)).collect(), distro: if s("distro").is_empty() { "Ubuntu".into() } else { s("distro") } })
 }
 
 /// Run one kit command where the project's agent lives, in the project's folder, and return what it printed. The kit stays the
@@ -1493,12 +1498,16 @@ struct Term {
     master: Box<dyn portable_pty::MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
+/// The open terminals of one viewer: the app's windows share one, each remote connection has its own.
+type TermMap = std::sync::Arc<Mutex<std::collections::HashMap<String, Term>>>;
 #[derive(Default)]
-struct Terms(Mutex<std::collections::HashMap<String, Term>>);
+struct Terms(TermMap);
 
 /// The scripts that keep sessions alive inside WSL, built into the program.
 const TERM_SH: &str = include_str!("../../wsl/term.sh");
 const TMUX_CONF: &str = include_str!("../../wsl/tmux.conf");
+/// Settings for the Playwright tool that make the Chrome it starts one that can be watched (see docs/remote.md).
+const PLAYWRIGHT_JSON: &str = include_str!("../../wsl/playwright.json");
 /// Put the session scripts where bash can run them (~/.local/share/maestro; inside WSL that is written through the
 /// \\wsl.localhost share) whenever they differ from this build's, and return term.sh's path as that bash sees it.
 fn launcher(p: &Project) -> Result<String, String> {
@@ -1511,7 +1520,7 @@ fn launcher(p: &Project) -> Result<String, String> {
         let linux = linux_of(&home.to_string_lossy()).ok_or("this project's claudeHome is not a folder inside WSL (\\\\wsl.localhost\\<distro>\\home\\<you>\\.claude)")?;
         (home.join(".local").join("share").join("maestro"), format!("{linux}/.local/share/maestro/term.sh"))
     };
-    for (name, text) in [("term.sh", TERM_SH), ("tmux.conf", TMUX_CONF)] {
+    for (name, text) in [("term.sh", TERM_SH), ("tmux.conf", TMUX_CONF), ("playwright.json", PLAYWRIGHT_JSON)] {
         let want = text.replace("\r\n", "\n");
         if rd(&dir.join(name)) != want {
             fs::create_dir_all(&dir).and_then(|_| fs::write(dir.join(name), want)).map_err(|e| format!("could not write {name} into {}: {e}", dir.display()))?;
@@ -1552,8 +1561,17 @@ fn find_claude() -> Option<(PathBuf, bool)> {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn term_open(id: String, kind: String, mode: String, proj: Option<usize>, name: Option<String>, session: Option<String>, prompt: Option<String>, label: Option<String>, cols: u16, rows: u16, app: tauri::AppHandle, terms: State<Terms>, cur: State<Cur>, window: tauri::WebviewWindow) -> Result<String, String> {
-    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
     let p = match proj { Some(i) => project_at(i)?, None => project(&cur, &window)? };
+    let (cmd, made) = session_command(p, kind, mode, name, session, prompt, label)?;
+    let shown = id.clone();
+    spawn_term(&terms.0, id, cmd, cols, rows, move |data| {
+        let _ = match data { Some(text) => app.emit("term", json!({ "id": shown, "data": text })), None => app.emit("term-exit", json!({ "id": shown })) };
+    })?;
+    Ok(made)
+}
+/// The program a session is, and the name it is given (empty for one that ends with its terminal).
+fn session_command(p: Project, kind: String, mode: String, name: Option<String>, session: Option<String>, prompt: Option<String>, label: Option<String>) -> Result<(portable_pty::CommandBuilder, String), String> {
+    use portable_pty::CommandBuilder;
     let mut made = String::new();
     let mut cmd;
     // what Claude Code is started with, wherever it runs
@@ -1623,20 +1641,24 @@ fn term_open(id: String, kind: String, mode: String, proj: Option<usize>, name: 
     } else {
         return Err("unknown kind of session".into());
     }
+    Ok((cmd, made))
+}
+/// Run a session's program in a pseudo-terminal kept in `map` under `id`. `out` is given what it prints, and `None` when it ends.
+fn spawn_term(map: &TermMap, id: String, cmd: portable_pty::CommandBuilder, cols: u16, rows: u16, out: impl Fn(Option<String>) + Send + 'static) -> Result<(), String> {
+    use portable_pty::{native_pty_system, PtySize};
     let pair = native_pty_system().openpty(PtySize { rows: rows.max(8), cols: cols.max(20), pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())?;
     let child = pair.slave.spawn_command(cmd).map_err(|e| format!("the session could not be started: {e}"))?;
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    terms.0.lock().map_err(|e| e.to_string())?.insert(id.clone(), Term { writer, master: pair.master, child });
+    map.lock().map_err(|e| e.to_string())?.insert(id.clone(), Term { writer, master: pair.master, child });
     // On Windows the output stream does not end when the program does, so nothing would ever say "ended": watch the program itself.
     // When it has exited, letting go of its terminal closes the stream, and the reader below reports the end.
     {
-        let (app, id) = (app.clone(), id.clone());
+        let map = map.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_millis(600));
-            let terms = app.state::<Terms>();
-            let Ok(mut map) = terms.0.lock() else { break };
+            let Ok(mut map) = map.lock() else { break };
             let gone = match map.get_mut(&id) { None => break, Some(t) => !matches!(t.child.try_wait(), Ok(None)) };
             if gone { map.remove(&id); break; }
         });
@@ -1654,14 +1676,14 @@ fn term_open(id: String, kind: String, mode: String, proj: Option<usize>, name: 
                     if good > 0 {
                         let text = String::from_utf8_lossy(&carry[..good]).to_string();
                         carry.drain(..good);
-                        let _ = app.emit("term", json!({ "id": id, "data": text }));
+                        out(Some(text));
                     }
                 }
             }
         }
-        let _ = app.emit("term-exit", json!({ "id": id }));
+        out(None);
     });
-    Ok(made)
+    Ok(())
 }
 /// The claude and shell sessions still running in tmux, whoever started them and whether or not a window shows them.
 #[tauri::command(async)]
@@ -1870,7 +1892,1039 @@ fn toggle(app: &tauri::AppHandle) {
     }
 }
 
+// ---- Remote: the sessions from a phone or another computer (docs/remote.md). Off unless it is turned on. ----
+// One port serves a small page and a WebSocket. Only connections that arrive over Tailscale (and from this machine itself)
+// are answered. A device pairs once with a code that works one time for ten minutes, and from then on gives a token of its
+// own, of which only the hash is kept; a device can be removed, which cuts it off at once. A remote terminal is a second
+// viewer of the same tmux session: only sessions that outlive the app can be reached, and nothing here can read or change a
+// project's files.
+const REMOTE_PAGE: &str = include_str!("../../ui/remote.html");
+const REMOTE_FILES: [(&str, &str, &str); 3] = [
+    ("/xterm.js", "text/javascript; charset=utf-8", include_str!("../../ui/vendor/xterm.js")),
+    ("/addon-fit.js", "text/javascript; charset=utf-8", include_str!("../../ui/vendor/addon-fit.js")),
+    ("/xterm.css", "text/css; charset=utf-8", include_str!("../../ui/vendor/xterm.css")),
+];
+const REMOTE_ICON: &[u8] = include_bytes!("../icons/icon.png");
+const REMOTE_SW: &str = include_str!("../../ui/remote-sw.js");
+const REMOTE_MANIFEST: &str = r##"{"name":"Maestro","short_name":"Maestro","start_url":"/","display":"standalone","background_color":"#0b0e13","theme_color":"#0b0e13","icons":[{"src":"/icon.png","sizes":"512x512","type":"image/png"}]}"##;
+const REMOTE_PORT: u16 = 4747;
+struct RemoteRun {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    port: u16,
+}
+static REMOTE: Mutex<Option<RemoteRun>> = Mutex::new(None);
+
+/// An address Tailscale hands out (100.64.0.0/10). Some internet providers hand out the same range, so the range alone
+/// does not say "Tailscale": see `remote_gate`.
+fn is_tailnet(ip: std::net::Ipv4Addr) -> bool {
+    let o = ip.octets();
+    o[0] == 100 && (o[1] & 0xc0) == 64
+}
+/// The address in what `tailscale ip -4` printed: one line, an address of the Tailscale range. Anything else (signed out,
+/// stopped, an error message) is no address.
+fn tailnet_ip_in(printed: &str) -> Option<std::net::Ipv4Addr> {
+    printed.lines().find_map(|l| l.trim().parse::<std::net::Ipv4Addr>().ok()).filter(|ip| is_tailnet(*ip))
+}
+/// Run Tailscale's own command line and give what it printed. On macOS the app and its command line are one program;
+/// the variable says which of the two is meant.
+fn tailscale(args: &[&str]) -> Option<String> {
+    let mut places: Vec<PathBuf> = vec![PathBuf::from("tailscale")];
+    if cfg!(windows) {
+        places.push(PathBuf::from(std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".into())).join("Tailscale").join("tailscale.exe"));
+    } else {
+        places.extend(["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale", "/usr/bin/tailscale"].map(PathBuf::from));
+    }
+    places.iter().find_map(|exe| {
+        let mut c = std::process::Command::new(exe);
+        c.args(args).env("TAILSCALE_BE_CLI", "1");
+        quiet(c).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+    })
+}
+/// This machine's Tailscale address, as Tailscale itself says it (`tailscale ip -4`). Asked at most every 15 seconds.
+fn tailscale_ip() -> Option<std::net::Ipv4Addr> {
+    static SEEN: Mutex<Option<(std::time::Instant, Option<std::net::Ipv4Addr>)>> = Mutex::new(None);
+    let mut seen = SEEN.lock().ok()?;
+    if let Some((at, ip)) = *seen {
+        if at.elapsed() < std::time::Duration::from_secs(15) { return ip; }
+    }
+    let ip = tailscale(&["ip", "-4"]).and_then(|printed| tailnet_ip_in(&printed));
+    *seen = Some((std::time::Instant::now(), ip));
+    ip
+}
+/// The secure address: Tailscale can answer https://<this machine's name> with a certificate of its own and hand the
+/// connection to Maestro on this machine (`tailscale serve`). A page needs it to be allowed notifications. Gives the name,
+/// and whether that is set up for this port. Asked at most every 15 seconds.
+fn remote_secure_state(port: u16, fresh: bool) -> (String, bool) {
+    static SEEN: Mutex<Option<(std::time::Instant, u16, String, bool)>> = Mutex::new(None);
+    let Ok(mut seen) = SEEN.lock() else { return (String::new(), false) };
+    if let Some((at, p, name, on)) = seen.as_ref() {
+        if !fresh && *p == port && at.elapsed() < std::time::Duration::from_secs(15) { return (name.clone(), *on); }
+    }
+    let name = tailscale(&["status", "--json"]).and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["Self"]["DNSName"].as_str().map(|n| n.trim_end_matches('.').to_string())).unwrap_or_default();
+    let on = !name.is_empty() && tailscale(&["serve", "status", "--json"]).map(|t| t.contains(&format!("127.0.0.1:{port}"))).unwrap_or(false);
+    *seen = Some((std::time::Instant::now(), port, name.clone(), on));
+    (name, on)
+}
+/// Who is answered at all. A connection from this machine to itself; or one that arrived on this machine's own Tailscale
+/// address from an address of the Tailscale range. A connection that came in over any other interface is not answered,
+/// whatever address it claims to come from.
+fn remote_gate(peer: std::net::IpAddr, local: std::net::IpAddr, tailscale: Option<std::net::Ipv4Addr>) -> bool {
+    let v4 = |ip: std::net::IpAddr| match ip { std::net::IpAddr::V4(a) => Some(a), std::net::IpAddr::V6(a) => a.to_ipv4_mapped() };
+    let own = |ip: std::net::IpAddr| ip.is_loopback() || v4(ip).map(|a| a.is_loopback()).unwrap_or(false);
+    if own(peer) || own(local) { return own(peer) && own(local); }
+    matches!((v4(peer), v4(local), tailscale), (Some(p), Some(l), Some(t)) if l == t && is_tailnet(p))
+}
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+fn hex_random(bytes: usize) -> Result<String, String> {
+    let mut b = vec![0u8; bytes];
+    getrandom::fill(&mut b).map_err(|e| format!("no random numbers from this system: {e}"))?;
+    Ok(b.iter().map(|x| format!("{x:02x}")).collect())
+}
+/// What is kept of a device's token: its SHA-256. The token itself exists only on the device.
+fn token_hash(t: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(t.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+/// Compared without stopping at the first difference, so the time taken says nothing about the secret.
+fn same_token(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+/// A pairing code works once, for ten minutes, and is never written to disk.
+const PAIR_SECS: u64 = 600;
+/// A device that has not connected for this long has to pair again.
+const DEVICE_IDLE_SECS: u64 = 30 * 86400;
+static REMOTE_PAIR: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+/// One writer of the remote part of maestro.config.json at a time.
+static REMOTE_CONFIG: Mutex<()> = Mutex::new(());
+fn pair_ok(have: &Option<(String, std::time::Instant)>, said: &str) -> bool {
+    matches!(have, Some((code, at)) if at.elapsed().as_secs() < PAIR_SECS && same_token(code, said))
+}
+fn remote_pair_code() -> Result<String, String> {
+    let code = hex_random(16)?;
+    *REMOTE_PAIR.lock().map_err(|e| e.to_string())? = Some((code.clone(), std::time::Instant::now()));
+    Ok(code)
+}
+/// A device gives the pairing code: the code is used up and the device gets a token of its own (id, name, token).
+fn remote_enroll(said: &str, name: &str) -> Option<(String, String, String)> {
+    {
+        let mut pair = REMOTE_PAIR.lock().ok()?;
+        if !pair_ok(&pair, said) { return None; }
+        *pair = None;
+    }
+    let (id, token) = (hex_random(4).ok()?, hex_random(16).ok()?);
+    let shown: String = one_line(name).chars().filter(|c| !c.is_control()).take(40).collect();
+    let shown = if shown.trim().is_empty() { "A device".to_string() } else { shown };
+    let _one = REMOTE_CONFIG.lock().ok()?;
+    let mut c = config();
+    if !c["remote"].is_object() { c["remote"] = json!({}); }
+    if !c["remote"]["devices"].is_array() { c["remote"]["devices"] = json!([]); }
+    c["remote"]["devices"].as_array_mut()?.push(json!({ "id": id, "name": shown, "hash": token_hash(&token), "added": now_secs(), "seen": now_secs() }));
+    save_config(&c).ok()?;
+    Some((id, shown, token))
+}
+/// Which paired device a token belongs to (id, name), if it has connected recently enough.
+fn device_of(devices: &Value, token: &str, now: u64) -> Option<(String, String)> {
+    if token.len() < 32 { return None; }
+    let hash = token_hash(token);
+    devices.as_array()?.iter().find(|d| same_token(d["hash"].as_str().unwrap_or(""), &hash) && now.saturating_sub(d["seen"].as_u64().unwrap_or(0)) < DEVICE_IDLE_SECS)
+        .map(|d| (d["id"].as_str().unwrap_or("").to_string(), d["name"].as_str().unwrap_or("A device").to_string()))
+}
+/// The device a token belongs to; when it was last seen is written down at most once an hour.
+fn remote_known(token: &str) -> Option<(String, String)> {
+    let _one = REMOTE_CONFIG.lock().ok()?;
+    let mut c = config();
+    let now = now_secs();
+    let found = device_of(&c["remote"]["devices"], token, now)?;
+    let stale = c["remote"]["devices"].as_array_mut().and_then(|a| a.iter_mut().find(|d| d["id"] == found.0.as_str())).map(|d| {
+        let old = now.saturating_sub(d["seen"].as_u64().unwrap_or(0)) > 3600;
+        if old { d["seen"] = json!(now); }
+        old
+    }).unwrap_or(false);
+    if stale { let _ = save_config(&c); }
+    Some(found)
+}
+/// Wrong codes from one address: after five, that address is not listened to for five minutes.
+static REMOTE_FAILS: Mutex<Vec<(std::net::IpAddr, u32, std::time::Instant)>> = Mutex::new(Vec::new());
+fn remote_blocked(ip: std::net::IpAddr) -> bool {
+    let Ok(mut fails) = REMOTE_FAILS.lock() else { return true };
+    fails.retain(|f| f.2.elapsed() < std::time::Duration::from_secs(300));
+    fails.iter().any(|f| f.0 == ip && f.1 >= 5)
+}
+fn remote_failed(ip: std::net::IpAddr) {
+    if let Ok(mut fails) = REMOTE_FAILS.lock() {
+        match fails.iter_mut().find(|f| f.0 == ip) {
+            Some(f) => { f.1 += 1; f.2 = std::time::Instant::now(); }
+            None => fails.push((ip, 1, std::time::Instant::now())),
+        }
+    }
+}
+/// The devices connected right now: which device, and the switch that cuts that connection.
+struct RemoteLive {
+    conn: u64,
+    device: String,
+    cut: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+static REMOTE_LIVE: Mutex<Vec<RemoteLive>> = Mutex::new(Vec::new());
+static REMOTE_APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+/// Every pairing, connection, refusal and removal goes into maestro.log, and to the window if there is one.
+fn remote_tell(what: &str, name: &str, from: Option<std::net::IpAddr>) {
+    let t = now_secs() % 86400;
+    note(format!("{:02}:{:02} UTC remote access: {what} — {name}{}", t / 3600, t % 3600 / 60, from.map(|ip| format!(" ({ip})")).unwrap_or_default()));
+    if let Some(app) = REMOTE_APP.get() { let _ = app.emit("remote", json!({ "what": what, "name": name })); }
+}
+fn remote_start() -> Result<u16, String> {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let mut run = REMOTE.lock().map_err(|e| e.to_string())?;
+    if let Some(r) = run.as_ref() { return Ok(r.port); }
+    let port = config()["remote"]["port"].as_u64().filter(|p| (1024..65536).contains(p)).map(|p| p as u16).unwrap_or(REMOTE_PORT);
+    // a build before devices had tokens of their own kept one shared code in the file: it is no longer accepted, take it out
+    if let Ok(_one) = REMOTE_CONFIG.lock() {
+        let mut c = config();
+        if c["remote"].as_object_mut().map(|r| r.remove("token").is_some()).unwrap_or(false) { let _ = save_config(&c); }
+    }
+    // a server that was just stopped lets go of the port a moment later
+    let mut tries = 0;
+    let listener = loop {
+        match std::net::TcpListener::bind(("0.0.0.0", port)) {
+            Ok(l) => break l,
+            Err(e) if tries >= 10 => return Err(format!("port {port} could not be opened: {e}")),
+            Err(_) => { tries += 1; std::thread::sleep(std::time::Duration::from_millis(150)); }
+        }
+    };
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let stop = Arc::new(AtomicBool::new(false));
+    *run = Some(RemoteRun { stop: stop.clone(), port });
+    { let stop = stop.clone(); std::thread::spawn(move || push_watch(stop)); }
+    std::thread::spawn(move || {
+        let live = Arc::new(AtomicUsize::new(0));
+        while !stop.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((s, peer)) => {
+                    let Ok(local) = s.local_addr() else { continue };
+                    // dropped unanswered: not from this machine or over Tailscale, too many at once, or too many wrong codes
+                    let tailscale = if peer.ip().is_loopback() { None } else { tailscale_ip() };
+                    if !remote_gate(peer.ip(), local.ip(), tailscale) || live.load(Ordering::Relaxed) >= 32 || remote_blocked(peer.ip()) { continue; }
+                    let (stop, live) = (stop.clone(), live.clone());
+                    live.fetch_add(1, Ordering::Relaxed);
+                    std::thread::spawn(move || {
+                        let _ = s.set_nonblocking(false);
+                        remote_conn(s, peer.ip(), &stop);
+                        live.fetch_sub(1, Ordering::Relaxed);
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(500)),
+            }
+        }
+    });
+    Ok(port)
+}
+fn remote_stop() {
+    if let Some(r) = REMOTE.lock().ok().and_then(|mut r| r.take()) { r.stop.store(true, std::sync::atomic::Ordering::Relaxed); }
+    if let Ok(mut pair) = REMOTE_PAIR.lock() { *pair = None; }
+}
+/// The first lines of a request: the method, the path without its query, and the headers with their names in lower case.
+/// Anything that is not a plain HTTP/1 request for a path is refused.
+fn remote_head(head: &[u8]) -> Option<(String, String, Vec<(String, String)>)> {
+    let text = std::str::from_utf8(head).ok()?;
+    let mut lines = text.split("\r\n");
+    let mut first = lines.next()?.split(' ');
+    let (method, target, version) = (first.next()?, first.next()?, first.next()?);
+    if first.next().is_some() || !version.starts_with("HTTP/1.") || !target.starts_with('/') || target.contains("..") { return None; }
+    let headers = lines.filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))).collect();
+    Some((method.to_string(), target.split('?').next().unwrap_or("/").to_string(), headers))
+}
+/// One connection: a file of the page, or the WebSocket the page talks through.
+fn remote_conn(mut s: std::net::TcpStream, peer: std::net::IpAddr, stop: &std::sync::atomic::AtomicBool) {
+    use std::io::{Read, Write};
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+    let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = s.set_write_timeout(Some(Duration::from_secs(10)));
+    let _ = s.set_nodelay(true);
+    // the whole request head has to arrive within five seconds and fit in 16 KB
+    let began = Instant::now();
+    let mut head: Vec<u8> = vec![];
+    let mut b = [0u8; 2048];
+    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        if head.len() > 16384 || began.elapsed() > Duration::from_secs(5) { return; }
+        match s.read(&mut b) { Ok(0) | Err(_) => return, Ok(n) => head.extend_from_slice(&b[..n]) }
+    }
+    let plain = |s: &mut std::net::TcpStream, status: &str, kind: &str, body: &[u8]| {
+        let head = format!("HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'\r\nConnection: close\r\n\r\n", body.len());
+        let _ = s.write_all(head.as_bytes()).and_then(|_| s.write_all(body)).and_then(|_| s.flush());
+    };
+    let Some((method, path, headers)) = remote_head(&head) else { return plain(&mut s, "400 Bad Request", "text/plain", b"not a request this answers") };
+    let hdr = |k: &str| headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    if method != "GET" { return plain(&mut s, "405 Method Not Allowed", "text/plain", b"GET only"); }
+    if path != "/ws" {
+        return match path.as_str() {
+            // for work on the page itself: "remote.page" in maestro.config.json names a file to serve in place of the built-in one
+            "/" | "/index.html" => match config()["remote"]["page"].as_str().and_then(|f| fs::read(f).ok()) {
+                Some(page) => plain(&mut s, "200 OK", "text/html; charset=utf-8", &page),
+                None => plain(&mut s, "200 OK", "text/html; charset=utf-8", REMOTE_PAGE.as_bytes()),
+            },
+            "/icon.png" => plain(&mut s, "200 OK", "image/png", REMOTE_ICON),
+            "/sw.js" => plain(&mut s, "200 OK", "text/javascript; charset=utf-8", REMOTE_SW.as_bytes()),
+            "/manifest.webmanifest" => plain(&mut s, "200 OK", "application/manifest+json", REMOTE_MANIFEST.as_bytes()),
+            _ => match REMOTE_FILES.iter().find(|(p, _, _)| *p == path) {
+                Some((_, kind, body)) => plain(&mut s, "200 OK", kind, body.as_bytes()),
+                None => plain(&mut s, "404 Not Found", "text/plain", b"not here"),
+            },
+        };
+    }
+    // the WebSocket: only from the page this server served
+    let Some(key) = hdr("sec-websocket-key") else { return plain(&mut s, "400 Bad Request", "text/plain", b"a WebSocket is expected here") };
+    // (behind the secure address the request is handed on by Tailscale, which may name the first host in a header of its own)
+    let from = hdr("origin").and_then(|o| o.split("://").nth(1));
+    if from.is_none() || (from != hdr("host") && from != hdr("x-forwarded-host")) { return plain(&mut s, "403 Forbidden", "text/plain", b"only the page served here may connect"); }
+    let accept = tungstenite::handshake::derive_accept_key(key.as_bytes());
+    if s.write_all(format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").as_bytes()).is_err() { return; }
+    let mut limits = tungstenite::protocol::WebSocketConfig::default();
+    limits.max_message_size = Some(1 << 20);
+    limits.max_frame_size = Some(1 << 20);
+    let mut ws = tungstenite::WebSocket::from_raw_socket(s, tungstenite::protocol::Role::Server, Some(limits));
+    let send = |ws: &mut tungstenite::WebSocket<std::net::TcpStream>, v: String| ws.send(tungstenite::Message::text(v)).is_ok();
+    // the first thing said has to be a device's own token, or the pairing code that earns it one
+    let hello = match ws.read() { Ok(m) if m.is_text() => m.into_text().map(|t| t.as_str().to_string()).unwrap_or_default(), _ => return };
+    let said = serde_json::from_str::<Value>(&hello).ok().filter(|m| m["op"] == "hello");
+    let who = said.and_then(|m| match m["pair"].as_str() {
+        Some(code) => remote_enroll(code, m["name"].as_str().unwrap_or("")).map(|(id, name, token)| (id, name, Some(token))),
+        None => remote_known(m["token"].as_str().unwrap_or("")).map(|(id, name)| (id, name, None)),
+    });
+    let Some((device, name, fresh)) = who else {
+        remote_failed(peer);
+        remote_tell("refused", "a wrong, used or expired code", Some(peer));
+        std::thread::sleep(Duration::from_secs(1));
+        send(&mut ws, json!({ "op": "denied" }).to_string());
+        let _ = ws.close(None);
+        return;
+    };
+    let vapid = { use base64::Engine; vapid_key().ok().map(|k| b64u().encode(public_bytes(&k))) };
+    if !send(&mut ws, json!({ "op": "hello", "host": host_name(), "version": env!("CARGO_PKG_VERSION"), "device": name, "token": fresh, "vapid": vapid }).to_string()) { return; }
+    static CONNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let conn = CONNS.fetch_add(1, Ordering::Relaxed);
+    let cut = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Ok(mut live) = REMOTE_LIVE.lock() { live.push(RemoteLive { conn, device: device.clone(), cut: cut.clone() }); }
+    remote_tell(if fresh.is_some() { "paired" } else { "connected" }, &name, Some(peer));
+    // from here on: read what the page says for a moment, send what the sessions printed, and again
+    let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(25)));
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let terms: TermMap = Default::default();
+    let watching: Watching = Default::default();
+    let mut pinged = Instant::now();
+    'conn: while !stop.load(Ordering::Relaxed) && !cut.load(Ordering::Relaxed) {
+        match ws.read() {
+            Ok(m) if m.is_text() => remote_op(m.into_text().map(|t| t.as_str().to_string()).unwrap_or_default().as_str(), &device, &tx, &terms, &watching),
+            Ok(m) if m.is_close() => break,
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Err(_) => break,
+        }
+        while let Ok(m) = rx.try_recv() {
+            if !send(&mut ws, m) { break 'conn; }
+        }
+        if pinged.elapsed() > Duration::from_secs(20) {
+            pinged = Instant::now();
+            if ws.send(tungstenite::Message::Ping(Vec::new().into())).is_err() { break; }
+        }
+    }
+    let _ = ws.close(None);
+    if let Ok(mut live) = REMOTE_LIVE.lock() { live.retain(|l| l.conn != conn); }
+    remote_tell("left", &name, Some(peer));
+    if let Some(w) = watching.lock().ok().and_then(|mut h| h.take()) { w.stop.store(true, Ordering::Relaxed); }
+    // letting go of the terminals only detaches: the sessions keep running in tmux
+    let held: Vec<Term> = terms.lock().map(|mut map| map.drain().map(|(_, t)| t).collect()).unwrap_or_default();
+    for mut t in held { let _ = t.child.kill(); }
+}
+fn host_name() -> String {
+    std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).ok().filter(|h| !h.is_empty()).or_else(|| fs::read_to_string("/etc/hostname").ok().map(|h| h.trim().to_string())).unwrap_or_else(|| "this computer".into())
+}
+/// The project through which the sessions that outlive the app are reached, with no window to ask: the first that keeps them.
+fn remote_side() -> Option<Project> {
+    let c = config();
+    let i = c["projects"].as_array()?.iter().position(|p| !runs_direct(p))?;
+    project_at(i).ok()
+}
+/// What a remote page shows first: the running sessions with the last lines on their screens, and the projects to start one in.
+fn remote_list() -> Value {
+    let c = config();
+    let projects: Vec<Value> = c["projects"].as_array().map(|a| a.iter().enumerate().map(|(i, p)| json!({ "i": i, "name": p["name"].as_str().unwrap_or(""), "keeps": !runs_direct(p), "favorite": p["favorite"].as_bool().unwrap_or(false) })).collect()).unwrap_or_default();
+    let mut sessions: Vec<Value> = vec![];
+    if let Some((p, launcher)) = remote_side().and_then(|p| launcher(&p).ok().map(|l| (p, l))) {
+        let run = |what: &str| p.bash_command(false, &[&launcher, what]).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+        let screens = run("--peek");
+        let browsers = run("--browsers");
+        let screen_of = |name: &str| screens.split('\u{1e}').find_map(|b| b.strip_prefix(name).and_then(|r| r.strip_prefix('\n'))).unwrap_or("").to_string();
+        for l in run("--list").lines() {
+            let f: Vec<&str> = l.split('\t').collect();
+            if f.len() < 6 || !ours(f[0]) { continue; }
+            sessions.push(json!({ "name": f[0], "created": f[1].parse::<i64>().unwrap_or(0), "kind": if f[2].is_empty() { "ubuntu" } else { f[2] }, "label": f[3], "project": f[4].rsplit('/').next().unwrap_or(""), "screen": screen_of(f[0]), "browser": browsers.lines().any(|b| b.split('\t').next() == Some(f[0])) }));
+        }
+    }
+    json!({ "op": "list", "projects": projects, "sessions": sessions })
+}
+// ---- Notifications to a paired device (Web Push): a page that was allowed them is told when a session starts waiting or
+// finishes, while the page is closed. The message is encrypted for that one browser; the service that carries it (Apple's,
+// Google's, Mozilla's) sees only that Maestro sent something. This is the one thing remote access sends out by itself.
+fn b64u() -> base64::engine::GeneralPurpose { base64::engine::general_purpose::URL_SAFE_NO_PAD }
+fn unhex(t: &str) -> Option<Vec<u8>> {
+    if t.len() % 2 != 0 { return None; }
+    (0..t.len()).step_by(2).map(|i| u8::from_str_radix(t.get(i..i + 2)?, 16).ok()).collect()
+}
+fn fresh_secret() -> Result<p256::SecretKey, String> {
+    for _ in 0..8 {
+        if let Some(k) = unhex(&hex_random(32)?).and_then(|b| p256::SecretKey::from_slice(&b).ok()) { return Ok(k); }
+    }
+    Err("no key could be made".into())
+}
+fn public_bytes(k: &p256::SecretKey) -> Vec<u8> {
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    k.public_key().to_encoded_point(false).as_bytes().to_vec()
+}
+/// The key this computer signs its notifications with, made once and kept in maestro.config.json.
+fn vapid_key() -> Result<p256::SecretKey, String> {
+    let _one = REMOTE_CONFIG.lock().map_err(|e| e.to_string())?;
+    let mut c = config();
+    if let Some(k) = c["remote"]["vapid"].as_str().and_then(unhex).and_then(|b| p256::SecretKey::from_slice(&b).ok()) { return Ok(k); }
+    let k = fresh_secret()?;
+    if !c["remote"].is_object() { c["remote"] = json!({}); }
+    c["remote"]["vapid"] = json!(k.to_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>());
+    save_config(&c)?;
+    Ok(k)
+}
+/// A message sealed for one browser (RFC 8291, "aes128gcm"): `ua` and `auth` are what the browser gave when it subscribed,
+/// `mine` a key used for this message only, `salt` sixteen random bytes.
+fn push_seal(ua: &[u8], auth: &[u8], payload: &[u8], mine: &p256::SecretKey, salt: &[u8; 16]) -> Result<Vec<u8>, String> {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::KeyInit;
+    let theirs = p256::PublicKey::from_sec1_bytes(ua).map_err(|_| "the device's key is not a key")?;
+    let shared = p256::ecdh::diffie_hellman(mine.to_nonzero_scalar(), theirs.as_affine());
+    let my_public = public_bytes(mine);
+    let mut ikm = [0u8; 32];
+    let info = [b"WebPush: info\0".as_slice(), ua, &my_public].concat();
+    hkdf::Hkdf::<sha2::Sha256>::new(Some(auth), shared.raw_secret_bytes()).expand(&info, &mut ikm).map_err(|e| e.to_string())?;
+    let prk = hkdf::Hkdf::<sha2::Sha256>::new(Some(salt), &ikm);
+    let (mut key, mut nonce) = ([0u8; 16], [0u8; 12]);
+    prk.expand(b"Content-Encoding: aes128gcm\0", &mut key).map_err(|e| e.to_string())?;
+    prk.expand(b"Content-Encoding: nonce\0", &mut nonce).map_err(|e| e.to_string())?;
+    let plain = [payload, &[2u8]].concat(); // 2 marks the last (here: the only) record
+    let sealed = aes_gcm::Aes128Gcm::new_from_slice(&key).map_err(|e| e.to_string())?.encrypt(aes_gcm::Nonce::from_slice(&nonce), plain.as_slice()).map_err(|_| "the message could not be sealed")?;
+    Ok([salt.as_slice(), &4096u32.to_be_bytes(), &[my_public.len() as u8], &my_public, &sealed].concat())
+}
+/// The signed note that says who is sending (RFC 8292): for the service at `audience`, good for twelve hours.
+fn push_pass(key: &p256::SecretKey, audience: &str, now: u64) -> String {
+    use base64::Engine;
+    use p256::ecdsa::signature::Signer;
+    let head = b64u().encode(br#"{"typ":"JWT","alg":"ES256"}"#);
+    let body = b64u().encode(json!({ "aud": audience, "exp": now + 12 * 3600, "sub": format!("https://github.com/{REPO}") }).to_string());
+    let sig: p256::ecdsa::Signature = p256::ecdsa::SigningKey::from(key).sign(format!("{head}.{body}").as_bytes());
+    format!("{head}.{body}.{}", b64u().encode(sig.to_bytes()))
+}
+/// Where a notification may be sent: only the services browsers really use, only over https.
+fn push_host(endpoint: &str) -> Option<String> {
+    let rest = endpoint.strip_prefix("https://")?;
+    let host = rest.split(['/', '?', '#']).next()?.to_ascii_lowercase();
+    if host.contains('@') || host.contains(':') { return None; }
+    ["push.apple.com", "googleapis.com", "push.services.mozilla.com", "notify.windows.com"].iter().any(|ok| host == *ok || host.ends_with(&format!(".{ok}"))).then_some(host)
+}
+/// Send one notification to one subscribed browser. Gives the service's answer (201 is "accepted"; 404 and 410 mean the
+/// subscription is gone).
+fn push_send(sub: &Value, payload: &Value) -> Result<u16, String> {
+    use base64::Engine;
+    use std::io::Write;
+    let endpoint = sub["endpoint"].as_str().unwrap_or("");
+    let host = push_host(endpoint).ok_or("not a notification service this app sends to")?;
+    let un = |k: &str| b64u().decode(sub["keys"][k].as_str().unwrap_or("").trim_end_matches('=').replace('+', "-").replace('/', "_")).map_err(|_| "the subscription could not be read".to_string());
+    let (ua, auth) = (un("p256dh")?, un("auth")?);
+    let mut salt = [0u8; 16];
+    getrandom::fill(&mut salt).map_err(|e| e.to_string())?;
+    let body = push_seal(&ua, &auth, payload.to_string().as_bytes(), &fresh_secret()?, &salt)?;
+    let key = vapid_key()?;
+    let pass = push_pass(&key, &format!("https://{host}"), now_secs());
+    let mut c = std::process::Command::new(system_tool("curl"));
+    c.args(["--silent", "--show-error", "--max-time", "20", "--proto", "=https", "--request", "POST", "--header", "TTL: 900", "--header", "Urgency: high", "--header", "Content-Encoding: aes128gcm", "--header", "Content-Type: application/octet-stream"]);
+    c.args(["--header", &format!("Authorization: vapid t={pass}, k={}", b64u().encode(public_bytes(&key)))]);
+    c.args(["--data-binary", "@-", "--output", if cfg!(windows) { "NUL" } else { "/dev/null" }, "--write-out", "%{http_code}", endpoint]);
+    let mut child = quiet(c).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("curl could not be started ({e})"))?;
+    if let Some(mut input) = child.stdin.take() { let _ = input.write_all(&body); }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    String::from_utf8_lossy(&out.stdout).trim().parse::<u16>().ok().filter(|c| *c > 0).ok_or_else(|| format!("the notification service was not reached: {}", String::from_utf8_lossy(&out.stderr).trim()))
+}
+/// What a session's screen says, the way the pages read it: ("needs", the question) when Claude Code waits for an answer,
+/// ("working", what it is doing) while it works, else ("idle", "").
+fn screen_state(screen: &str, claude: bool) -> (&'static str, String) {
+    let plain = |t: &str| t.chars().map(|c| if ('\u{2500}'..='\u{259f}').contains(&c) { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
+    let body: Vec<String> = screen.lines().map(plain).filter(|t| {
+        let low = t.to_lowercase();
+        let words = low.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+        let two = t.as_bytes().windows(2).any(|w| w[0].is_ascii_alphanumeric() && w[1].is_ascii_alphanumeric());
+        two && !["for shortcuts", "shift+tab", "esc to", "auto mode", "bypass", "accept edits", "plan mode"].iter().any(|f| words.starts_with(f)) && !["shift+tab to cycle", "/effort", "for shortcuts", "/clear to save"].iter().any(|f| low.contains(f))
+    }).collect();
+    let timed = |t: &str| t.match_indices('(').any(|(i, _)| { let d: String = t[i + 1..].chars().take_while(|c| c.is_ascii_digit()).collect(); !d.is_empty() && t[i + 1 + d.len()..].starts_with('s') });
+    let busy = body.iter().rev().take(25).find(|t| { let l = t.to_lowercase(); l.contains("esc to interrupt") || l.contains("tokens)") || timed(t) || l.contains("…(") || l.contains("… (") });
+    if let Some(now) = busy {
+        let said = now.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+        return ("working", said.split(" (").next().unwrap_or(said).to_string());
+    }
+    if !claude { return ("idle", String::new()); }
+    // numbered answers at the end of the screen: "1. Yes", "2. …", counted from one
+    let answer = |t: &str| -> Option<u32> {
+        let t = t.trim_start_matches(|c: char| c == '❯' || c == '>' || c == '›' || c.is_whitespace());
+        let mut ch = t.chars();
+        let n = ch.next()?.to_digit(10)?;
+        let rest = ch.as_str();
+        ((rest.starts_with(". ") || rest.starts_with(") ")) && rest.chars().count() <= 72 && rest.trim().chars().count() > 1).then_some(n)
+    };
+    let (mut nums, mut at) = (vec![], body.len());
+    for i in (body.len().saturating_sub(12)..body.len()).rev() {
+        match answer(&body[i]) { Some(n) => { nums.insert(0, n); at = i; } None if !nums.is_empty() => break, None => {} }
+    }
+    if nums.len() >= 2 && nums.iter().enumerate().all(|(i, n)| *n as usize == i + 1) {
+        return ("needs", body[..at].last().cloned().unwrap_or_default());
+    }
+    ("idle", String::new())
+}
+/// While remote access is on: watch the sessions for the devices that asked to be told, and tell them. A device that has
+/// the page open is not told (it sees it there).
+fn push_watch(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use std::time::{Duration, Instant};
+    // name → (state, since when, told about the end of this stretch of work)
+    let mut was: std::collections::HashMap<String, (&'static str, Instant)> = Default::default();
+    let mut worked: std::collections::HashMap<String, Instant> = Default::default();
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_secs(4));
+        let devices: Vec<(String, Value)> = config()["remote"]["devices"].as_array().map(|a| a.iter().filter(|d| d["push"]["endpoint"].is_string()).map(|d| (d["id"].as_str().unwrap_or("").to_string(), d["push"].clone())).collect()).unwrap_or_default();
+        if devices.is_empty() { was.clear(); worked.clear(); continue; }
+        let list = remote_list();
+        let mut tell: Vec<Value> = vec![];
+        let mut here: Vec<String> = vec![];
+        for s in list["sessions"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
+            let (name, label) = (s["name"].as_str().unwrap_or("").to_string(), s["label"].as_str().unwrap_or("A session").to_string());
+            let (st, detail) = screen_state(s["screen"].as_str().unwrap_or(""), s["kind"] == "claude");
+            here.push(name.clone());
+            let before = was.get(&name).map(|w| w.0);
+            if before != Some(st) {
+                if st == "working" { worked.insert(name.clone(), Instant::now()); }
+                // a first look at a session says nothing: only a change does
+                if before.is_some() && st == "needs" { tell.push(json!({ "title": label, "body": if detail.is_empty() { "Waiting for you".to_string() } else { format!("Waiting for you: {detail}") }, "name": name })); }
+                was.insert(name.clone(), (st, Instant::now()));
+            } else if st == "idle" && s["kind"] == "claude" {
+                // work that lasted, then quiet for two looks: it has finished
+                if let Some(began) = worked.get(&name).copied() {
+                    let quiet_for = was.get(&name).map(|w| w.1.elapsed()).unwrap_or_default();
+                    if quiet_for >= Duration::from_secs(7) {
+                        worked.remove(&name);
+                        if quiet_for.as_secs() < 60 && began.elapsed() - quiet_for >= Duration::from_secs(20) { tell.push(json!({ "title": label, "body": "Finished", "name": name })); }
+                    }
+                }
+            }
+        }
+        was.retain(|n, _| here.contains(n));
+        worked.retain(|n, _| here.contains(n));
+        if tell.is_empty() { continue; }
+        let live: Vec<String> = REMOTE_LIVE.lock().map(|l| l.iter().map(|x| x.device.clone()).collect()).unwrap_or_default();
+        for (id, sub) in devices.iter().filter(|(id, _)| !live.contains(id)) {
+            for t in &tell {
+                match push_send(sub, t) {
+                    Ok(404) | Ok(410) => { push_forget(id); break; }
+                    Ok(code) if code >= 400 => note(format!("remote access: a notification was refused by the service ({code})")),
+                    Ok(_) => {}
+                    Err(e) => { note(format!("remote access: a notification was not sent: {e}")); break; }
+                }
+            }
+        }
+    }
+}
+/// Keep, or (with `None`) forget, where a device is sent its notifications.
+fn push_keep(device: &str, sub: Option<Value>) {
+    let Ok(_one) = REMOTE_CONFIG.lock() else { return };
+    let mut c = config();
+    let Some(d) = c["remote"]["devices"].as_array_mut().and_then(|a| a.iter_mut().find(|d| d["id"] == device)) else { return };
+    match sub { Some(s) => d["push"] = s, None => { if let Some(o) = d.as_object_mut() { o.remove("push"); } } }
+    let _ = save_config(&c);
+}
+fn push_forget(device: &str) { push_keep(device, None); }
+
+/// The end of a file, as text: a conversation file grows to many megabytes and only its last part is wanted.
+fn file_tail(f: &Path, bytes: u64) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = fs::File::open(f) else { return String::new() };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let from = len.saturating_sub(bytes);
+    if file.seek(SeekFrom::Start(from)).is_err() { return String::new(); }
+    let mut buf = Vec::new();
+    let _ = file.read_to_end(&mut buf);
+    let text = String::from_utf8_lossy(&buf).to_string();
+    // the first line is a cut one unless the whole file was read
+    if from == 0 { text } else { text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default() }
+}
+/// What was said in a conversation file, oldest first, as (id, role, text): role is "user", "assistant" or "tool" (one line
+/// saying what was done). Thinking, tool results, side conversations and the program's own notes are left out.
+fn chat_items(text: &str) -> Vec<(String, &'static str, String)> {
+    let mut out = vec![];
+    let clip = |t: &str, n: usize| -> String { let t = t.trim(); if t.chars().count() > n { format!("{}…", t.chars().take(n).collect::<String>()) } else { t.to_string() } };
+    for line in text.lines() {
+        // most lines of the file are not messages: skip them before they are parsed
+        if !(line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"")) { continue; }
+        let Ok(o) = serde_json::from_str::<Value>(line) else { continue };
+        let role = match o["type"].as_str() { Some("user") => "user", Some("assistant") => "assistant", _ => continue };
+        if o["isSidechain"].as_bool().unwrap_or(false) || o["isMeta"].as_bool().unwrap_or(false) { continue; }
+        let Some(id) = o["uuid"].as_str() else { continue };
+        let said = |t: &str| !t.trim().is_empty() && !(role == "user" && t.trim_start().starts_with('<'));
+        match &o["message"]["content"] {
+            Value::String(t) => if said(t) { out.push((id.to_string(), role, clip(t, 8000))); },
+            Value::Array(blocks) => for (i, b) in blocks.iter().enumerate() {
+                match b["type"].as_str() {
+                    Some("text") => { let t = b["text"].as_str().unwrap_or(""); if said(t) { out.push((format!("{id}-{i}"), role, clip(t, 8000))); } }
+                    Some("tool_use") if role == "assistant" => {
+                        let input = &b["input"];
+                        let what = ["command", "file_path", "path", "pattern", "url", "query", "description", "prompt", "skill"].iter().find_map(|k| input[*k].as_str()).unwrap_or("");
+                        out.push((format!("{id}-{i}"), "tool", clip(&one_line(&format!("{} {what}", b["name"].as_str().unwrap_or("tool"))), 160)));
+                    }
+                    _ => {}
+                }
+            },
+            _ => {}
+        }
+    }
+    out
+}
+/// Letters and digits only, lower case: how a screen and a conversation are compared, whatever the terminal did to the line breaks.
+fn squeeze(t: &str) -> String {
+    t.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
+}
+/// How well a conversation file fits what is on a session's screen: how many of its last things said can be read there.
+fn chat_fit(items: &[(String, &'static str, String)], screen: &str) -> usize {
+    items.iter().rev().filter(|i| i.1 != "tool").take(6).filter(|i| {
+        // a stretch from the middle of the first line: the start may carry marks the screen draws differently
+        let s = squeeze(i.2.lines().next().unwrap_or(""));
+        let piece: String = s.chars().skip(if s.chars().count() > 30 { 4 } else { 0 }).take(24).collect();
+        piece.chars().count() >= 8 && screen.contains(&piece)
+    }).count()
+}
+/// The conversation file of a running Claude Code session. Sessions this app started carry their conversation's id; for the
+/// others the files of that folder written since the session began are compared with what is on its screen. Kept for a while.
+fn chat_file(p: &Project, launcher: &str, name: &str) -> Option<PathBuf> {
+    static KNOWN: Mutex<Vec<(String, PathBuf, std::time::Instant)>> = Mutex::new(Vec::new());
+    if let Ok(known) = KNOWN.lock() {
+        if let Some(k) = known.iter().find(|k| k.0 == name && k.2.elapsed() < std::time::Duration::from_secs(20)) { return Some(k.1.clone()); }
+    }
+    let out = p.bash_command(false, &[launcher, "--chat", name]).output().ok()?;
+    let printed = String::from_utf8_lossy(&out.stdout).to_string();
+    let (first, screen) = printed.split_once('\n')?;
+    let f: Vec<&str> = first.trim_end_matches('\r').split('\t').collect();
+    if f.len() < 3 { return None; }
+    let created = f[0].parse::<u64>().unwrap_or(0);
+    // Claude Code names a project's folder after its path, every other character turned into a dash
+    let folder: String = f[1].chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let dir = p.claude_home.join("projects").join(folder);
+    // a session that carries its conversation's id has that conversation and no other: until Claude Code has written the file
+    // (it does with the first message) nothing has been said, and the file of another conversation is not shown in its place
+    let by_id = Some(f[2].trim()).filter(|s| s.len() >= 32 && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')).map(|s| dir.join(format!("{s}.jsonl")));
+    if let Some(mine) = by_id.as_ref().filter(|f| !f.is_file()) { return Some(mine.clone()); }
+    let found = by_id.or_else(|| {
+        let mut files: Vec<(PathBuf, u64)> = fs::read_dir(&dir).ok()?.flatten().filter_map(|e| {
+            let path = e.path();
+            if path.extension().map(|x| x != "jsonl").unwrap_or(true) { return None; }
+            let at = e.metadata().ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+            (at + 120 >= created).then_some((path, at))
+        }).collect();
+        files.sort_by(|a, b| b.1.cmp(&a.1));
+        files.truncate(8);
+        let screen = squeeze(screen);
+        let scored: Vec<(usize, PathBuf)> = files.iter().map(|(f, _)| (chat_fit(&chat_items(&file_tail(f, 900_000)), &screen), f.clone())).collect();
+        let best = scored.iter().max_by_key(|s| s.0)?;
+        // nothing of it on the screen: only an only candidate is believed
+        if best.0 > 0 { Some(best.1.clone()) } else if files.len() == 1 { Some(files[0].0.clone()) } else { None }
+    });
+    // a long stretch of work can leave nothing of the conversation on the screen: the file found before is still the one
+    let found = found.or_else(|| KNOWN.lock().ok()?.iter().find(|k| k.0 == name && k.1.is_file()).map(|k| k.1.clone()))?;
+    if let Ok(mut known) = KNOWN.lock() {
+        known.retain(|k| k.0 != name && k.2.elapsed() < std::time::Duration::from_secs(600));
+        known.push((name.to_string(), found.clone(), std::time::Instant::now()));
+    }
+    Some(found)
+}
+/// A session's conversation for a remote page: the last things said, or only those after `after` when the page has that one.
+fn remote_chat(name: &str, after: &str) -> Value {
+    let none = json!({ "op": "chat", "name": name, "found": false, "reset": true, "items": [] });
+    if !ours(name) { return none; }
+    let Some((p, launcher)) = remote_side().and_then(|p| launcher(&p).ok().map(|l| (p, l))) else { return none };
+    let Some(file) = chat_file(&p, &launcher, name) else { return none };
+    let all = chat_items(&file_tail(&file, 900_000));
+    let from = all.iter().position(|i| i.0 == after).map(|i| i + 1);
+    let items: Vec<Value> = all.iter().skip(from.unwrap_or(all.len().saturating_sub(60))).map(|(id, role, text)| json!({ "id": id, "role": role, "text": text })).collect();
+    json!({ "op": "chat", "name": name, "found": true, "reset": from.is_none(), "items": items })
+}
+// ---- A session's browser, watched from a paired page. A program in a session (Playwright, for Claude Code) drives a Chrome;
+// started with --remote-debugging-port, that Chrome takes a second connection on a port of this computer only, and over it
+// sends a picture of the page each time the page changes. Those pictures are passed on to the one page that asked, at the
+// pace it shows them. Nothing is typed or clicked from here: the page is only looked at.
+struct Watch { name: String, stop: std::sync::atomic::AtomicBool, seen: std::sync::atomic::AtomicU64, pick: Mutex<String> }
+type Watching = std::sync::Arc<Mutex<Option<std::sync::Arc<Watch>>>>;
+/// Which sessions drive a Chrome that can be watched, and the port each one chose.
+fn browser_ports() -> Vec<(String, u16)> {
+    let Some((p, l)) = remote_side().and_then(|p| launcher(&p).ok().map(|l| (p, l))) else { return vec![] };
+    let out = p.bash_command(false, &[&l, "--browsers"]).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    out.lines().filter_map(|l| { let (n, port) = l.trim_end_matches('\r').split_once('\t')?; Some((n.to_string(), port.trim().parse().ok()?)) }).filter(|(n, _)| ours(n)).collect()
+}
+/// What that Chrome has open, as it lists it itself: (id, title, address) of each page, the one in front first.
+fn browser_pages(port: u16) -> Option<Vec<(String, String, String)>> {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let mut s = std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_secs(2)).ok()?;
+    let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = s.set_write_timeout(Some(Duration::from_secs(3)));
+    s.write_all(format!("GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").as_bytes()).ok()?;
+    // the answer says how long it is; the connection may stay open after it
+    let (mut got, mut b) = (Vec::new(), [0u8; 8192]);
+    let body = loop {
+        if let Some(at) = got.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&got[..at]).to_ascii_lowercase();
+            let len = head.lines().find_map(|l| l.strip_prefix("content-length:")).and_then(|v| v.trim().parse::<usize>().ok());
+            if len.map(|n| got.len() >= at + 4 + n).unwrap_or(false) { break got[at + 4..].to_vec(); }
+        }
+        if got.len() > (4 << 20) { return None; }
+        match s.read(&mut b) { Ok(0) | Err(_) => { let at = got.windows(4).position(|w| w == b"\r\n\r\n")?; break got[at + 4..].to_vec(); } Ok(n) => got.extend_from_slice(&b[..n]) }
+    };
+    let v: Value = serde_json::from_slice(&body).ok()?;
+    let t = |o: &Value, k: &str| o[k].as_str().unwrap_or("").to_string();
+    Some(v.as_array()?.iter().filter(|o| o["type"] == "page" && !t(o, "url").starts_with("devtools://") && !t(o, "url").starts_with("chrome-extension://")).map(|o| (t(o, "id"), t(o, "title"), t(o, "url"))).filter(|p| !p.0.is_empty() && p.0.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).collect())
+}
+/// Watch the browser of one session for one page, until told to stop: say what it has open, and pass on each picture of the
+/// page in front (or of the one chosen). The browser is asked for the next picture only once this one was shown, or has had
+/// its time: a slow connection gets fewer pictures, not a growing queue of old ones.
+fn browser_watch(width: u32, w: std::sync::Arc<Watch>, tx: std::sync::mpsc::Sender<String>) {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+    let name = w.name.clone();
+    let gone = || w.stop.load(Ordering::Relaxed);
+    let nap = |ms: u64| { let till = Instant::now() + Duration::from_millis(ms); while Instant::now() < till && !gone() { std::thread::sleep(Duration::from_millis(50)); } };
+    let state = |pages: &[(String, String, String)], page: &str| json!({ "op": "browser", "name": name, "state": if pages.is_empty() { "none" } else { "on" }, "page": page, "pages": pages.iter().map(|(id, title, url)| json!({ "id": id, "title": title, "url": url })).collect::<Vec<Value>>() }).to_string();
+    let chosen = |pages: &[(String, String, String)]| { let pick = w.pick.lock().map(|p| p.clone()).unwrap_or_default(); pages.iter().find(|p| p.0 == pick).or(pages.first()).map(|p| p.0.clone()).unwrap_or_default() };
+    let (mut said, mut n) = (String::new(), 0u64);
+    while !gone() {
+        let port = browser_ports().into_iter().find(|(s, _)| *s == name).map(|(_, p)| p);
+        let pages = port.and_then(browser_pages).unwrap_or_default();
+        let page = chosen(&pages);
+        let now = state(&pages, &page);
+        if now != said { said = now.clone(); if tx.send(now).is_err() { return; } }
+        let (Some(port), false) = (port, page.is_empty()) else { nap(2000); continue };
+        let Ok(s) = std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_secs(2)) else { nap(1000); continue };
+        let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+        let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
+        let _ = s.set_nodelay(true);
+        let mut limits = tungstenite::protocol::WebSocketConfig::default();
+        limits.max_message_size = Some(24 << 20);
+        limits.max_frame_size = Some(24 << 20);
+        let Ok((mut ws, _)) = tungstenite::client::client_with_config(format!("ws://127.0.0.1:{port}/devtools/page/{page}"), s, Some(limits)) else { nap(1000); continue };
+        let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(80)));
+        let ask = |ws: &mut tungstenite::WebSocket<std::net::TcpStream>, id: u64, method: &str, params: Value| ws.send(tungstenite::Message::text(json!({ "id": id, "method": method, "params": params }).to_string())).is_ok();
+        if !ask(&mut ws, 1, "Page.startScreencast", json!({ "format": "jpeg", "quality": 60, "maxWidth": width, "maxHeight": width * 4, "everyNthFrame": 1 })) { nap(1000); continue; }
+        let mut owed: Option<(i64, u64, Instant)> = None;
+        let mut looked = Instant::now();
+        loop {
+            if gone() { let _ = ws.close(None); return; }
+            match ws.read() {
+                Ok(m) if m.is_text() => {
+                    let text = m.into_text().map(|t| t.as_str().to_string()).unwrap_or_default();
+                    // (most of what a page's connection says is not a picture: look before parsing something that large)
+                    if text.contains("\"Page.screencastFrame\"") {
+                        if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                            let p = &v["params"];
+                            n += 1;
+                            if tx.send(json!({ "op": "frame", "name": name, "n": n, "data": p["data"], "w": p["metadata"]["deviceWidth"], "h": p["metadata"]["deviceHeight"] }).to_string()).is_err() { return; }
+                            owed = Some((p["sessionId"].as_i64().unwrap_or(0), n, Instant::now()));
+                        }
+                    }
+                }
+                Ok(m) if m.is_close() => break,
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+                Err(_) => break,
+            }
+            if let Some((sid, k, at)) = owed {
+                if w.seen.load(Ordering::Relaxed) >= k || at.elapsed() > Duration::from_millis(1500) {
+                    owed = None;
+                    if !ask(&mut ws, 2, "Page.screencastFrameAck", json!({ "sessionId": sid })) { break; }
+                }
+            }
+            // every so often: is this still the page to show, and is it still called the same
+            if looked.elapsed() > Duration::from_millis(1500) || chosen_changed(&w, &page) {
+                looked = Instant::now();
+                let Some(pages) = browser_pages(port) else { break };
+                let want = chosen(&pages);
+                let now = state(&pages, &want);
+                if now != said { said = now.clone(); if tx.send(now).is_err() { return; } }
+                if want != page { break; }
+            }
+        }
+        let _ = ws.close(None);
+        nap(250);
+    }
+}
+/// Whether another page than the one being shown has been asked for.
+fn chosen_changed(w: &Watch, page: &str) -> bool { w.pick.lock().map(|p| !p.is_empty() && *p != page).unwrap_or(false) }
+/// One thing a paired page asked for. Answers and what the sessions print go back through `tx`.
+fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, terms: &TermMap, watching: &Watching) {
+    let Ok(m) = serde_json::from_str::<Value>(text) else { return };
+    let s = |k: &str| m[k].as_str().unwrap_or("").to_string();
+    let n = |k: &str, d: u64| m[k].as_u64().unwrap_or(d).min(500) as u16;
+    let say = |v: Value| { let _ = tx.send(v.to_string()); };
+    let op = s("op");
+    match op.as_str() {
+        "list" => {
+            let tx = tx.clone();
+            std::thread::spawn(move || { let _ = tx.send(remote_list().to_string()); });
+        }
+        // this device asks to be told (it gives where and the keys to seal messages for it), or asks not to be
+        "push" => {
+            if m["off"].as_bool().unwrap_or(false) { return push_forget(device); }
+            let sub = &m["sub"];
+            let fits = |k: &str| sub["keys"][k].as_str().map(|v| (16..=128).contains(&v.len())).unwrap_or(false);
+            if sub["endpoint"].as_str().and_then(push_host).is_some() && sub["endpoint"].as_str().map(|e| e.len() < 1024).unwrap_or(false) && fits("p256dh") && fits("auth") {
+                push_keep(device, Some(json!({ "endpoint": sub["endpoint"], "keys": { "p256dh": sub["keys"]["p256dh"], "auth": sub["keys"]["auth"] } })));
+            } else { say(json!({ "op": "err", "text": "this browser's notification service is not one Maestro sends to" })); }
+        }
+        // watch the browser of a session (one at a time for a page), another of its pages, or no longer
+        "browser" => {
+            use std::sync::atomic::Ordering;
+            let name = s("name");
+            let Ok(mut held) = watching.lock() else { return };
+            if let Some(w) = held.as_ref().filter(|w| w.name == name && !name.is_empty()) {
+                if let Ok(mut pick) = w.pick.lock() { *pick = s("page"); }
+                return;
+            }
+            if let Some(w) = held.take() { w.stop.store(true, Ordering::Relaxed); }
+            if !ours(&name) { return; }
+            let w = std::sync::Arc::new(Watch { name, stop: Default::default(), seen: Default::default(), pick: Mutex::new(s("page")) });
+            *held = Some(w.clone());
+            let (tx, width) = (tx.clone(), m["width"].as_u64().unwrap_or(1200).clamp(320, 2000) as u32);
+            std::thread::spawn(move || browser_watch(width, w, tx));
+        }
+        "seen" => {
+            if let Some(w) = watching.lock().ok().and_then(|h| h.clone()) { w.seen.fetch_max(m["n"].as_u64().unwrap_or(0), std::sync::atomic::Ordering::Relaxed); }
+        }
+        "chat" => {
+            let (tx, name, after) = (tx.clone(), s("name"), s("after"));
+            std::thread::spawn(move || { let _ = tx.send(remote_chat(&name, &after).to_string()); });
+        }
+        "open" | "new" => {
+            let id = s("id");
+            if id.is_empty() || id.len() > 40 || terms.lock().map(|t| t.len() >= 12 || t.contains_key(&id)).unwrap_or(true) { return; }
+            let made = (|| -> Result<String, String> {
+                let first = Some(s("prompt")).filter(|t| !t.trim().is_empty());
+                let (p, kind, mode, name) = if op == "open" {
+                    (remote_side().ok_or("no project here keeps its sessions running")?, "claude".to_string(), "attach".to_string(), Some(s("name")))
+                } else {
+                    let kind = s("kind");
+                    if kind != "claude" && kind != "ubuntu" { return Err("from here a session is Claude Code or a shell".into()); }
+                    let i = m["proj"].as_u64().map(|i| i as usize).filter(|i| *i < config()["projects"].as_array().map(|a| a.len()).unwrap_or(0)).ok_or("that project is not in the list")?;
+                    let p = project_at(i)?;
+                    if p.host() == Host::Direct { return Err("this project's sessions end with the app: start it at the computer".into()); }
+                    (p, kind, "new".to_string(), None)
+                };
+                let label = first.clone().unwrap_or_else(|| if kind == "claude" { "Claude".into() } else { "Shell".into() });
+                let (cmd, made) = session_command(p, kind, mode, name, None, first, Some(label))?;
+                let (tx, shown) = (tx.clone(), id.clone());
+                spawn_term(terms, id.clone(), cmd, n("cols", 80), n("rows", 24), move |data| {
+                    let _ = tx.send(match data { Some(t) => json!({ "op": "out", "id": shown, "data": t }), None => json!({ "op": "exit", "id": shown }) }.to_string());
+                })?;
+                Ok(made)
+            })();
+            match made {
+                Ok(name) => {
+                    if op == "new" { if let Some(app) = REMOTE_APP.get() { let _ = app.emit("remote", json!({ "what": "session", "name": name })); } }
+                    say(json!({ "op": "opened", "id": id, "name": name }))
+                }
+                Err(e) => say(json!({ "op": "err", "id": id, "text": e })),
+            }
+        }
+        "in" => {
+            if let Ok(mut map) = terms.lock() {
+                if let Some(t) = map.get_mut(&s("id")) { let _ = std::io::Write::write_all(&mut t.writer, s("data").as_bytes()).and_then(|_| std::io::Write::flush(&mut t.writer)); }
+            }
+        }
+        "size" => {
+            if let Ok(map) = terms.lock() {
+                if let Some(t) = map.get(&s("id")) { let _ = t.master.resize(portable_pty::PtySize { rows: n("rows", 24).max(4), cols: n("cols", 80).max(10), pixel_width: 0, pixel_height: 0 }); }
+            }
+        }
+        "close" => {
+            if let Some(mut t) = terms.lock().ok().and_then(|mut map| map.remove(&s("id"))) { let _ = t.child.kill(); }
+        }
+        // without opening it: type a line into a session, or end it
+        "say" | "end" => {
+            let (name, line, enter) = (s("name"), s("text"), m["enter"].as_bool().unwrap_or(true));
+            if !ours(&name) || line.len() > 4000 { return; }
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                if let Some((p, l)) = remote_side().and_then(|p| launcher(&p).ok().map(|l| (p, l))) {
+                    let _ = if op == "end" { p.bash_command(false, &[&l, "--kill", &name]).output() } else { p.bash_command(false, &[&l, "--say", &name, &line, if enter { "enter" } else { "stay" }]).output() };
+                }
+                let _ = tx.send(remote_list().to_string());
+            });
+        }
+        _ => {}
+    }
+}
+/// Windows Firewall decides per kind of network, and Tailscale's adapter is a private one: the rule Windows offers to make
+/// when a program first listens often covers only the network you are on. So Maestro has a rule of its own, by name: this
+/// program, this port, from Tailscale's addresses only.
+const FIREWALL_RULE: &str = "Maestro remote access";
+/// Whether that rule is in place: "ok", "missing", or "blocked" when a rule that blocks this program stands in the way
+/// (Windows makes one when its question is answered with Cancel). `None` where there is no Windows Firewall.
+fn remote_firewall(port: u16) -> Option<String> {
+    if !cfg!(windows) { return None; }
+    static OK: Mutex<Option<u16>> = Mutex::new(None);
+    if OK.lock().ok().map(|o| *o == Some(port)).unwrap_or(false) { return Some("ok".into()); }
+    let exe = std::env::current_exe().ok()?.to_string_lossy().replace('\'', "''");
+    let script = format!("$me = '{exe}'; $r = Get-NetFirewallRule -DisplayName '{FIREWALL_RULE}' -ErrorAction SilentlyContinue | Where-Object {{ $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' -and $_.Direction -eq 'Inbound' }} | Where-Object {{ ($_ | Get-NetFirewallApplicationFilter).Program -eq $me -and ($_ | Get-NetFirewallPortFilter).LocalPort -eq '{port}' }}; $b = Get-NetFirewallApplicationFilter -Program $me -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object {{ $_.Enabled -eq 'True' -and $_.Action -eq 'Block' -and $_.Direction -eq 'Inbound' }}; if ($b) {{ 'blocked' }} elseif ($r) {{ 'ok' }} else {{ 'missing' }}");
+    let mut c = std::process::Command::new("powershell.exe");
+    c.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    let out = quiet(c).output().ok()?;
+    let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if said == "ok" { if let Ok(mut o) = OK.lock() { *o = Some(port); } }
+    Some(if said == "ok" || said == "blocked" { said } else { "missing".into() })
+}
+/// The script that puts the rule in place, run with administrator rights (Windows asks). It replaces an earlier rule of
+/// this name and takes away rules that block this program from being reached.
+fn firewall_script(exe: &str, port: u16) -> String {
+    let exe = exe.replace('\'', "''");
+    format!("$me = '{exe}'; Get-NetFirewallRule -DisplayName '{FIREWALL_RULE}' -ErrorAction SilentlyContinue | Remove-NetFirewallRule; Get-NetFirewallApplicationFilter -Program $me -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object {{ $_.Action -eq 'Block' -and $_.Direction -eq 'Inbound' }} | Remove-NetFirewallRule; New-NetFirewallRule -DisplayName '{FIREWALL_RULE}' -Description 'Lets devices of your Tailscale network reach Maestro. Made by Maestro; remove it freely.' -Direction Inbound -Action Allow -Program $me -Protocol TCP -LocalPort {port} -RemoteAddress 100.64.0.0/10 -Profile Any | Out-Null")
+}
+/// Put the firewall rule in place. Windows asks for permission; saying no changes nothing.
+#[tauri::command(async)]
+fn remote_allow() -> Result<Value, String> {
+    use base64::Engine;
+    let port = REMOTE.lock().ok().and_then(|r| r.as_ref().map(|r| r.port)).ok_or("turn remote access on first")?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().to_string();
+    // handed over encoded, so that no quoting between the two shells can change what runs
+    let wide: Vec<u8> = firewall_script(&exe, port).encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(wide);
+    let mut c = std::process::Command::new("powershell.exe");
+    c.args(["-NoProfile", "-NonInteractive", "-Command", &format!("Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{encoded}'")]);
+    let out = quiet(c).output().map_err(|e| e.to_string())?;
+    match remote_firewall(port).as_deref() {
+        Some("ok") => Ok(remote_state()),
+        _ if !out.status.success() => Err("Windows was not given permission, so the firewall is as it was".into()),
+        _ => Err("the firewall rule could not be made: see docs/remote.md for the rule to add by hand".into()),
+    }
+}
+/// The pairing link as a code a phone's camera reads, drawn as SVG.
+fn remote_qr(url: &str) -> String {
+    qrcode::QrCode::new(url.as_bytes()).map(|q| q.render::<qrcode::render::svg::Color>().min_dimensions(220, 220).build()).unwrap_or_default()
+}
+/// What the Remote screen shows: whether it is on, whether Tailscale is up, the paired devices and which are connected now,
+/// and, while a pairing code is live, the address that pairs a device (the code rides after the #, which a browser never
+/// sends to a server), also as a code to scan.
+#[tauri::command(async)]
+fn remote_state() -> Value {
+    let c = config();
+    let port = REMOTE.lock().ok().and_then(|r| r.as_ref().map(|r| r.port));
+    let ip = tailscale_ip();
+    let live: Vec<String> = REMOTE_LIVE.lock().map(|l| l.iter().map(|x| x.device.clone()).collect()).unwrap_or_default();
+    let now = now_secs();
+    let devices: Vec<Value> = c["remote"]["devices"].as_array().map(|a| a.iter().map(|d| {
+        let id = d["id"].as_str().unwrap_or("");
+        json!({ "id": id, "name": d["name"], "added": d["added"], "seen": d["seen"], "live": live.iter().filter(|x| x.as_str() == id).count(), "expired": now.saturating_sub(d["seen"].as_u64().unwrap_or(0)) >= DEVICE_IDLE_SECS })
+    }).collect()).unwrap_or_default();
+    let code = REMOTE_PAIR.lock().ok().and_then(|p| p.as_ref().filter(|(_, at)| at.elapsed().as_secs() < PAIR_SECS).map(|(c, at)| (c.clone(), PAIR_SECS - at.elapsed().as_secs())));
+    let (secure_name, secure_on) = port.map(|p| remote_secure_state(p, false)).unwrap_or_default();
+    let pair = match (port, ip, code) {
+        (Some(port), Some(ip), Some((code, left))) => { let url = if secure_on { format!("https://{secure_name}/#{code}") } else { format!("http://{ip}:{port}/#{code}") }; json!({ "qr": remote_qr(&url), "url": url, "left": left }) }
+        _ => Value::Null,
+    };
+    let firewall = port.and_then(remote_firewall);
+    json!({ "on": c["remote"]["on"].as_bool().unwrap_or(false), "running": port.is_some(), "port": port.unwrap_or(REMOTE_PORT), "tailscale": ip.is_some(), "firewall": firewall, "devices": devices, "pair": pair, "secure": { "on": secure_on, "name": secure_name } })
+}
+/// Turn the secure address on or off: ask Tailscale to answer https://<this machine's name> and hand it to Maestro. The first
+/// time, Tailscale wants this allowed for your network and prints where to do that: that text is given back as `note`.
+#[tauri::command(async)]
+fn remote_secure(on: bool) -> Result<Value, String> {
+    use std::io::Read;
+    let port = REMOTE.lock().ok().and_then(|r| r.as_ref().map(|r| r.port)).ok_or("turn remote access on first")?;
+    let exe = if cfg!(windows) { let f = PathBuf::from(std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".into())).join("Tailscale").join("tailscale.exe"); if f.is_file() { f } else { PathBuf::from("tailscale") } } else { ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale", "/usr/bin/tailscale"].iter().map(PathBuf::from).find(|f| f.is_file()).unwrap_or_else(|| PathBuf::from("tailscale")) };
+    let mut c = std::process::Command::new(exe);
+    if on { c.args(["serve", "--bg", "--https=443", &format!("http://127.0.0.1:{port}")]); } else { c.args(["serve", "--https=443", "off"]); }
+    c.env("TAILSCALE_BE_CLI", "1");
+    let mut child = quiet(c).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("Tailscale could not be started: {e}"))?;
+    // it waits, without end, for the permission it asks for: give it a few seconds, then read what it said
+    let began = std::time::Instant::now();
+    let done = loop {
+        match child.try_wait() { Ok(Some(_)) => break true, Ok(None) if began.elapsed() > std::time::Duration::from_secs(8) => { let _ = child.kill(); let _ = child.wait(); break false; } Ok(None) => std::thread::sleep(std::time::Duration::from_millis(150)), Err(_) => break true }
+    };
+    let mut said = String::new();
+    if let Some(mut o) = child.stdout.take() { let _ = o.read_to_string(&mut said); }
+    if let Some(mut e) = child.stderr.take() { let mut t = String::new(); let _ = e.read_to_string(&mut t); said.push_str(&t); }
+    let (_, now_on) = remote_secure_state(port, true);
+    let mut state = remote_state();
+    if on && !now_on { state["secure"]["note"] = json!(if done && said.trim().is_empty() { "Tailscale did not set the secure address up.".to_string() } else { said.split_whitespace().collect::<Vec<_>>().join(" ") }); }
+    Ok(state)
+}
+/// Turn remote access on or off (kept in maestro.config.json).
+#[tauri::command(async)]
+fn remote_set(on: bool) -> Result<Value, String> {
+    {
+        let _one = REMOTE_CONFIG.lock().map_err(|e| e.to_string())?;
+        let mut c = config();
+        if !c["remote"].is_object() { c["remote"] = json!({}); }
+        c["remote"]["on"] = json!(on);
+        save_config(&c)?;
+    }
+    if on { remote_start()?; } else { remote_stop(); }
+    Ok(remote_state())
+}
+/// Make a pairing code: one device, within ten minutes. A code made earlier stops working.
+#[tauri::command(async)]
+fn remote_pair() -> Result<Value, String> {
+    if REMOTE.lock().map_err(|e| e.to_string())?.is_none() { return Err("turn remote access on first".into()); }
+    remote_pair_code()?;
+    Ok(remote_state())
+}
+/// Remove one paired device (or, with no id, all of them): its token stops working and its connections are cut now.
+#[tauri::command(async)]
+fn remote_forget(id: Option<String>) -> Result<Value, String> {
+    let gone: Vec<(String, String)> = {
+        let _one = REMOTE_CONFIG.lock().map_err(|e| e.to_string())?;
+        let mut c = config();
+        let Some(list) = c["remote"]["devices"].as_array_mut() else { return Ok(remote_state()) };
+        let hit = |d: &Value| id.as_deref().map(|i| d["id"] == i).unwrap_or(true);
+        let gone = list.iter().filter(|d| hit(d)).map(|d| (d["id"].as_str().unwrap_or("").to_string(), d["name"].as_str().unwrap_or("A device").to_string())).collect();
+        list.retain(|d| !hit(d));
+        save_config(&c)?;
+        gone
+    };
+    if let Ok(live) = REMOTE_LIVE.lock() {
+        for l in live.iter().filter(|l| gone.iter().any(|(i, _)| *i == l.device)) { l.cut.store(true, std::sync::atomic::Ordering::Relaxed); }
+    }
+    for (_, name) in &gone { remote_tell("removed", name, None); }
+    Ok(remote_state())
+}
+/// `maestro --remote`: no window, only the remote page, until the program is stopped. For a machine you leave running.
+/// It prints a link that pairs one device within ten minutes; start it again for another.
+fn remote_only() {
+    match remote_start().and_then(|port| remote_pair_code().map(|code| (port, code))) {
+        Ok((port, code)) => {
+            let ip = tailscale_ip();
+            println!("Maestro remote, pairing link (one device, ten minutes): http://{}:{port}/#{code}", ip.map(|i| i.to_string()).unwrap_or_else(|| "127.0.0.1".into()));
+            if ip.is_none() { println!("Tailscale is not running here: only this machine itself is answered."); }
+            match remote_firewall(port).as_deref() {
+                Some("ok") | None => {}
+                Some(f) => println!("Windows Firewall: the rule \"{FIREWALL_RULE}\" is {f}, so other devices may not get through. As administrator:\n  {}", firewall_script(&std::env::current_exe().map(|e| e.to_string_lossy().to_string()).unwrap_or_default(), port)),
+            }
+            loop { std::thread::sleep(std::time::Duration::from_secs(3600)); }
+        }
+        Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+    }
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--remote") { return remote_only(); }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| reveal(app))) // a second launch shows the one already running
         .plugin(tauri_plugin_dialog::init())
@@ -1922,6 +2976,10 @@ fn main() {
             if let Some(here) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
                 for name in ["maestro.exe.old", "Maestro.exe.old", "maestro.old", "WebView2Loader.dll.old"] { let _ = fs::remove_file(here.join(name)); }
             }
+            let _ = REMOTE_APP.set(app.handle().clone());
+            if config()["remote"]["on"].as_bool().unwrap_or(false) {
+                if let Err(e) = remote_start() { note(format!("remote access could not start: {e}")); }
+            }
             // started by Windows at sign-in: stay in the tray until the key is pressed
             if !std::env::args().any(|a| a == "--hidden") {
                 reveal(app.handle());
@@ -1929,7 +2987,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit
+            load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_allow, remote_secure,
         ])
         .run(tauri::generate_context!())
         .expect("Maestro could not start");
@@ -2161,6 +3219,152 @@ mod tests {
         assert!(p.bash_command(false, &[&l, "--list"]).output().unwrap().status.success());
         assert!(p.bash_command(false, &[&l, "--nonsense"]).output().unwrap().status.code() == Some(2));
         let _ = fs::remove_dir_all(&d);
+    }
+    /// Remote access answers this machine itself and what arrives on its own Tailscale address, nothing else.
+    #[test]
+    fn remote_answers_only_what_arrives_over_tailscale() {
+        let ip = |t: &str| t.parse::<std::net::IpAddr>().unwrap();
+        let ts = Some("100.101.102.103".parse::<std::net::Ipv4Addr>().unwrap());
+        // this machine to itself, with or without Tailscale
+        assert!(remote_gate(ip("127.0.0.1"), ip("127.0.0.1"), None));
+        assert!(remote_gate(ip("::1"), ip("::1"), ts));
+        // another device of the Tailscale network, arriving on this machine's Tailscale address
+        assert!(remote_gate(ip("100.64.0.9"), ip("100.101.102.103"), ts));
+        assert!(remote_gate(ip("::ffff:100.64.0.9"), ip("::ffff:100.101.102.103"), ts));
+        // the same range handed out by an internet provider: it arrived on another address of this machine
+        assert!(!remote_gate(ip("100.64.0.9"), ip("100.64.0.20"), ts));
+        assert!(!remote_gate(ip("100.64.0.9"), ip("100.64.0.20"), None));
+        assert!(!remote_gate(ip("100.64.0.9"), ip("100.101.102.103"), None));
+        // the home network, the internet, an address just outside the range, and a claim to be this machine from elsewhere
+        for no in ["192.168.0.10", "10.0.0.2", "8.8.8.8", "100.63.255.255", "100.128.0.1", "fd7a:115c:a1e0::1"] {
+            assert!(!remote_gate(ip(no), ip("100.101.102.103"), ts), "{no}");
+            assert!(!remote_gate(ip(no), ip("192.168.0.5"), ts), "{no}");
+        }
+        assert!(!remote_gate(ip("127.0.0.1"), ip("192.168.0.5"), ts));
+        assert!(!remote_gate(ip("192.168.0.10"), ip("127.0.0.1"), ts));
+    }
+    /// A pairing code works while it is fresh; a device is known by its token's hash, until it has stayed away too long.
+    #[test]
+    fn remote_codes_expire_and_devices_are_known_by_hash() {
+        let now = std::time::Instant::now();
+        assert!(pair_ok(&Some(("abcd".into(), now)), "abcd"));
+        assert!(!pair_ok(&Some(("abcd".into(), now)), "abce"));
+        assert!(!pair_ok(&None, "abcd") && !pair_ok(&Some(("abcd".into(), now)), ""));
+        if let Some(old) = now.checked_sub(std::time::Duration::from_secs(PAIR_SECS + 1)) { assert!(!pair_ok(&Some(("abcd".into(), old)), "abcd")); }
+        assert!(same_token("a5f9", "a5f9") && !same_token("a5f9", "a5f8") && !same_token("a5f9", "a5f") && !same_token("", "a5f9"));
+        assert_eq!(token_hash("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let token = "0123456789abcdef0123456789abcdef";
+        let devices = json!([{ "id": "aa", "name": "Phone", "hash": token_hash(token), "seen": 1_000_000 }, { "id": "bb", "name": "Laptop", "hash": token_hash("ffffffffffffffffffffffffffffffff"), "seen": 1_000_000 }]);
+        assert_eq!(device_of(&devices, token, 1_000_500), Some(("aa".into(), "Phone".into())));
+        assert_eq!(device_of(&devices, "0123456789abcdef0123456789abcdee", 1_000_500), None);
+        assert_eq!(device_of(&devices, &token_hash(token), 1_000_500), None); // the hash in the file is not a way in
+        assert_eq!(device_of(&devices, token, 1_000_000 + DEVICE_IDLE_SECS), None);
+        assert_eq!(device_of(&devices, "", 1_000_500), None);
+        assert_eq!(device_of(&json!(null), token, 1_000_500), None);
+        assert_eq!(tailnet_ip_in("100.121.112.23\r\n"), Some("100.121.112.23".parse().unwrap()));
+        assert_eq!(tailnet_ip_in("Tailscale is stopped.\n"), None);
+        assert_eq!(tailnet_ip_in("192.168.0.6\n"), None);
+        assert_eq!(tailnet_ip_in(""), None);
+        let script = firewall_script("D:\\Apps\\O'Brien\\Maestro.exe", 4747);
+        assert!(script.contains("$me = 'D:\\Apps\\O''Brien\\Maestro.exe';") && script.contains("-LocalPort 4747 -RemoteAddress 100.64.0.0/10"));
+        let code = remote_qr("http://100.64.0.1:4747/#0123456789abcdef0123456789abcdef");
+        assert!(code.contains("<svg") && code.contains("</svg>") && !code.contains("<script"));
+    }
+    /// A conversation file becomes what was said; the file that fits a screen is the one whose words are on it.
+    #[test]
+    fn a_conversation_is_read_and_matched_to_a_screen() {
+        let file = [
+            r#"{"type":"mode","mode":"x"}"#,
+            r#"{"type":"user","uuid":"u1","message":{"role":"user","content":"Redraw the tide curve from at most 288 points"}}"#,
+            r#"{"type":"user","uuid":"u0","isMeta":true,"message":{"role":"user","content":"a note of the program"}}"#,
+            r#"{"type":"user","uuid":"u2","message":{"role":"user","content":"<system-reminder>not for showing</system-reminder>"}}"#,
+            r#"{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"I will **smooth** it."},{"type":"tool_use","name":"Bash","input":{"command":"npm test -- TideChart"}}]}}"#,
+            r#"{"type":"user","uuid":"u3","message":{"role":"user","content":[{"type":"tool_result","content":"14 passed"}]}}"#,
+            r#"{"type":"assistant","uuid":"a2","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"a side conversation"}]}}"#,
+            "not json",
+        ].join("\n");
+        let items = chat_items(&file);
+        assert_eq!(items.iter().map(|i| (i.0.as_str(), i.1, i.2.as_str())).collect::<Vec<_>>(), vec![
+            ("u1", "user", "Redraw the tide curve from at most 288 points"), ("a1-1", "assistant", "I will **smooth** it."), ("a1-2", "tool", "Bash npm test -- TideChart"),
+        ]);
+        let screen = squeeze("> Redraw the tide curve from at\n  most 288 points\n● I will smooth it.");
+        assert_eq!(chat_fit(&items, &screen), 2); // the question, wrapped by the terminal, and the answer without its marks
+        assert_eq!(chat_fit(&items, &squeeze("> Something else entirely was asked here")), 0);
+        assert_eq!(squeeze("Héllo,\n  Wörld 42!"), "héllowörld42");
+    }
+    /// A sealed notification opens again with the device's own keys, and only with them; a screen is read as the pages read it.
+    #[test]
+    fn a_notification_is_sealed_for_one_device_and_a_screen_is_read() {
+        use aes_gcm::aead::Aead;
+        use aes_gcm::KeyInit;
+        let device = p256::SecretKey::from_slice(&[7u8; 32]).unwrap();
+        let mine = p256::SecretKey::from_slice(&[9u8; 32]).unwrap();
+        let (auth, salt) = ([3u8; 16], [5u8; 16]);
+        let sealed = push_seal(&public_bytes(&device), &auth, b"{\"title\":\"Tide curve\"}", &mine, &salt).unwrap();
+        // the header: the salt, a record size, and this message's public key
+        assert_eq!((&sealed[..16], &sealed[16..20], sealed[20] as usize), (&salt[..], &4096u32.to_be_bytes()[..], 65));
+        assert_eq!(&sealed[21..86], public_bytes(&mine).as_slice());
+        // the device's side of it, as a browser does it
+        let open = |key: &p256::SecretKey, auth: &[u8]| -> Option<Vec<u8>> {
+            let theirs = p256::PublicKey::from_sec1_bytes(&sealed[21..86]).ok()?;
+            let shared = p256::ecdh::diffie_hellman(key.to_nonzero_scalar(), theirs.as_affine());
+            let mut ikm = [0u8; 32];
+            hkdf::Hkdf::<sha2::Sha256>::new(Some(auth), shared.raw_secret_bytes()).expand(&[b"WebPush: info\0".as_slice(), &public_bytes(key), &sealed[21..86]].concat(), &mut ikm).ok()?;
+            let prk = hkdf::Hkdf::<sha2::Sha256>::new(Some(&sealed[..16]), &ikm);
+            let (mut k, mut n) = ([0u8; 16], [0u8; 12]);
+            prk.expand(b"Content-Encoding: aes128gcm\0", &mut k).ok()?;
+            prk.expand(b"Content-Encoding: nonce\0", &mut n).ok()?;
+            aes_gcm::Aes128Gcm::new_from_slice(&k).ok()?.decrypt(aes_gcm::Nonce::from_slice(&n), &sealed[86..]).ok()
+        };
+        assert_eq!(open(&device, &auth).unwrap(), b"{\"title\":\"Tide curve\"}\x02");
+        assert!(open(&p256::SecretKey::from_slice(&[8u8; 32]).unwrap(), &auth).is_none() && open(&device, &[4u8; 16]).is_none());
+        // the pass: three parts, the middle one names the service and an end
+        let pass = push_pass(&mine, "https://web.push.apple.com", 1_000);
+        let parts: Vec<&str> = pass.split('.').collect();
+        let claims: Value = { use base64::Engine; serde_json::from_slice(&b64u().decode(parts[1]).unwrap()).unwrap() };
+        assert_eq!((parts.len(), claims["aud"].as_str(), claims["exp"].as_u64()), (3, Some("https://web.push.apple.com"), Some(1_000 + 12 * 3600)));
+        assert_eq!({ use base64::Engine; b64u().decode(parts[2]).unwrap().len() }, 64);
+        // only real notification services, only https
+        for yes in ["https://web.push.apple.com/abc", "https://fcm.googleapis.com/fcm/send/x", "https://updates.push.services.mozilla.com/wpush/v2/x"] { assert!(push_host(yes).is_some(), "{yes}"); }
+        for no in ["http://web.push.apple.com/abc", "https://127.0.0.1/x", "https://evil.example/push.apple.com", "https://push.apple.com.evil.example/x", "https://noreply@web.push.apple.com/x", "https://web.push.apple.com:8443/x", ""] { assert!(push_host(no).is_none(), "{no}"); }
+        // what a screen says
+        let ask = " Bash command\n   npm run build\n Do you want to proceed?\n \u{276f} 1. Yes\n   2. Yes, and don't ask again for npm run build\n   3. No, and tell Claude what to do differently\n";
+        assert_eq!(screen_state(ask, true), ("needs", "Do you want to proceed?".to_string()));
+        assert_eq!(screen_state(ask, false).0, "idle");
+        assert_eq!(screen_state("\u{25cf} Editing src/TideChart.tsx\n\u{273b} Smoothing the curve\u{2026} (42s \u{00b7} \u{2193} 3.1k tokens \u{00b7} esc to interrupt)\n  \u{23f5}\u{23f5} auto mode on (shift+tab to cycle)", true), ("working", "Smoothing the curve\u{2026}".to_string()));
+        assert_eq!(screen_state("\u{25cf} The curve now uses 288 points.\n  1. first step done\n  3. not a list of answers\n\u{276f} ", true).0, "idle");
+        assert_eq!(screen_state("", true).0, "idle");
+    }
+    #[test]
+    fn a_browser_lists_its_pages() {
+        use std::io::{Read, Write};
+        // a stand-in for Chrome's debugging port: one answer, with its length, on a connection that stays open
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let t = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut b = [0u8; 1024];
+            let n = s.read(&mut b).unwrap();
+            assert!(String::from_utf8_lossy(&b[..n]).starts_with("GET /json/list "));
+            let body = r#"[{"id":"AB12","title":"Shop","type":"page","url":"https://shop.example/cart"},{"id":"W1","title":"worker","type":"service_worker","url":"https://shop.example/sw.js"},{"id":"D1","title":"DevTools","type":"page","url":"devtools://devtools/x"},{"id":"../x","title":"odd","type":"page","url":"https://odd.example/"}]"#;
+            s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{body}", body.len()).as_bytes()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        });
+        let began = std::time::Instant::now();
+        let pages = browser_pages(port).unwrap();
+        assert_eq!(pages, vec![("AB12".to_string(), "Shop".to_string(), "https://shop.example/cart".to_string())]);
+        assert!(began.elapsed() < std::time::Duration::from_millis(350), "the answer's stated length was not used");
+        t.join().unwrap();
+        assert!(browser_pages(port).is_none());
+    }
+    #[test]
+    fn remote_requests_are_read_strictly() {
+        let (m, p, h) = remote_head(b"GET /xterm.js?v=1 HTTP/1.1\r\nHost: 100.64.0.1:4747\r\nSec-WebSocket-Key:  abc \r\n\r\n").unwrap();
+        assert_eq!((m.as_str(), p.as_str()), ("GET", "/xterm.js"));
+        assert!(h.contains(&("host".into(), "100.64.0.1:4747".into())) && h.contains(&("sec-websocket-key".into(), "abc".into())));
+        for bad in [&b"GET /../maestro.config.json HTTP/1.1\r\n\r\n"[..], b"GET http://elsewhere/ HTTP/1.1\r\n\r\n", b"GET / HTTP/2\r\n\r\n", b"GET /\r\n\r\n", b"GET / HTTP/1.1 extra\r\n\r\n", b"\xff\xfe\r\n\r\n", b"\r\n\r\n", b""] {
+            assert!(remote_head(bad).is_none(), "{:?}", String::from_utf8_lossy(bad));
+        }
     }
     #[test]
     fn versions_are_compared_number_by_number() {

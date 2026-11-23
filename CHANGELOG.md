@@ -3,6 +3,26 @@
 Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- Remote access: your running sessions on a phone or another computer, over your own Tailscale network. A card per session
+  with its last lines, one-tap answers and a reply line, and each session as a full terminal with a row of keys for a phone.
+  Off unless you turn it on (`> Remote access`). A device pairs by scanning a code that works once; each device then has a
+  token of its own and can be removed, and the window shows when one is connected. On Windows the Remote access screen
+  checks the firewall and can add the one rule that lets Tailscale devices through. `maestro --remote` serves it without the
+  window. See [docs/remote.md](docs/remote.md).
+- Remote access shows the browser a session drives: a Browser view beside the conversation and the terminal, with a picture
+  of the page each time it changes, the address, and a choice between the pages it has open. It needs the browser started
+  with a debugging port; for the Playwright tool there is a settings file to point it at
+  ([docs/remote.md](docs/remote.md#the-browser-view)).
+- Remote access shows a Claude Code session as its conversation: what was said and done, read from Claude Code's own record,
+  with a message line. A session started from the page says that it is starting, then opens as its conversation; the project
+  it will start in is named on the sheet, and a session nobody named is called after its project.
+- A session started from a paired device gets a tab in the window too, without restarting Maestro.
+- Console tabs can be put in any order: drag a tab to another slot, or press `Ctrl+Shift+PageUp` / `PageDown` to move the
+  session you are in. The tiles and the `Alt+1`…`9` numbers follow, and sessions that outlive the app come back in that order.
+
 ## [0.3.1] - 2026-11-20
 
 ### Added

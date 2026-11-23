@@ -19,6 +19,7 @@ Thanks for looking. Maestro is small on purpose: one Rust file, one page. Change
 | --- | --- |
 | `src-tauri/src/main.rs` | Everything that touches the disk, git, WSL and the terminals. Each `#[tauri::command]` is one call the page can make. |
 | `ui/index.html` | The whole interface: styles, markup and script in one file, embedded at build time. |
+| `ui/remote.html` | The page a phone or another computer opens when remote access is on: one file, served by the app. To work on it without rebuilding, name the file as `"page"` under `"remote"` in `maestro.config.json`: the app then serves it from disk. |
 | `ui/vendor/` | xterm.js, vendored so the app needs no network. |
 | `wsl/` | The two files that keep sessions alive inside WSL; built into the program. |
 | `starter/` | The starter harness templates (`{{project}}`, `{{date}}`, `{{dir}}`, `{{instructions}}` are filled in). |

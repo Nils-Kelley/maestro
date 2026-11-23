@@ -19,6 +19,7 @@
 | --- | --- |
 | `Ctrl+Shift+N` / `U` / `P` | New Claude Code session, shell (Ubuntu on Windows), PowerShell (Windows) |
 | `Alt+1`…`9`, `Ctrl+Tab` | Switch session |
+| drag a tab, `Ctrl+Shift+PageUp` / `PageDown` | Move a session to another slot. Its tile and its `Alt` number follow, and the order is kept for next time |
 | `Ctrl+Shift+A` / `L` | All sessions at a glance / cycle the tiles |
 | `Ctrl+Shift+O` | The session in a window of its own |
 | `Ctrl+Shift+K` | More ways to start |

@@ -10,6 +10,9 @@ maestro.log
 # words that must never be committed: read by tools/leak-check.mjs, one pattern per line
 .private-words
 
+# the stamp a local commit check leaves
+.claude/.validation-passed
+
 # captures made while testing
 shot*.png
 .playwright-mcp/

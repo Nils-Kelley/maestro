@@ -218,6 +218,8 @@ label.chk { display: inline-flex; gap: 8px; align-items: center; color: var(--di
 .stab { flex: 1 1 0; min-width: 170px; max-width: 320px; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 8px; align-items: center; background: var(--raise); border: 1px solid var(--line); border-left: 3px solid #46505e; border-radius: 8px; color: var(--ink2); font: inherit; font-size: 12.5px; padding: 5px 6px 5px 8px; cursor: pointer; text-align: left; position: relative; }
 .stab:hover { border-color: var(--line2); border-left-color: inherit; } .stab.on { background: var(--sel); border-color: rgba(92, 200, 255, 0.45); color: var(--fg); }
 .stab.working { border-left-color: var(--accent); } .stab.finished { border-left-color: var(--ok); } .stab.needs { border-left-color: var(--warn); } .stab.new { border-left-color: var(--ink2); } .stab.ended { border-left-color: transparent; opacity: 0.7; }
+#remote { background: rgba(47, 182, 90, 0.14); border: 1px solid rgba(47, 182, 90, 0.5); color: var(--ok); border-radius: 999px; font: inherit; font-size: 12px; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
+.stab.drag { border-color: var(--accent); background: var(--sel); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); z-index: 1; } body.dragging, body.dragging .stab { cursor: grabbing; user-select: none; }
 .stab .num { font: 10.5px var(--mono); color: var(--faint); } .stab .tx { min-width: 0; display: grid; gap: 1px; }
 .stab .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-weight: 600; }
 .stab .n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--dim); font-size: 12px; } .stab .n .w { color: var(--ink2); } .stab.working .n .w { color: var(--accent); } .stab.finished .n .w { color: var(--ok); } .stab.needs .n .w { color: var(--warn); }
@@ -287,7 +289,7 @@ body.pop { background: #0b0e13; } body.pop #panel { display: none; } .popterm { 
 <body>
 <div id="panel" class="in">
   <div id="boot" hidden><div class="mark"><svg viewBox="0 0 1024 1024" aria-hidden="true"><circle class="ring o" cx="512" cy="512" r="340" pathLength="360" stroke-dasharray="270 90"/><circle class="ring m" cx="512" cy="512" r="232" pathLength="360" stroke-dasharray="100 30 100 30 70 30"/><circle class="core" cx="512" cy="512" r="66"/><circle class="pulse" cx="512" cy="512" r="120"/></svg><div class="name">MAESTRO</div><div class="tag">your agents, in concert</div></div><pre id="bootlog" aria-hidden="true"></pre><span class="skip">any key skips</span></div>
-  <div id="top" data-tauri-drag-region><svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.25" stroke="currentColor" stroke-width="1.5"/><path d="M12 12l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><b id="vtitle"></b><input id="q" placeholder="Search memories, rules and work" autocomplete="off" spellcheck="false" aria-label="Search"><span id="proj"></span><span class="win"><button data-pin title="Keep Maestro above other windows" aria-label="Keep Maestro above other windows" aria-pressed="false"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.2 1.5h3.6l-.5 3.2 1.9 1.9H2.8l1.9-1.9zM6 6.6v4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button data-max title="Maximize or restore" aria-label="Maximize or restore"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button><button data-min title="Minimize" aria-label="Minimize"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button><button class="x" data-quit title="Close Maestro (Esc only hides it)" aria-label="Close Maestro"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7m0-7l-7 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span></div>
+  <div id="top" data-tauri-drag-region><svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.25" stroke="currentColor" stroke-width="1.5"/><path d="M12 12l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><b id="vtitle"></b><input id="q" placeholder="Search memories, rules and work" autocomplete="off" spellcheck="false" aria-label="Search"><button id="remote" type="button" hidden></button><span id="proj"></span><span class="win"><button data-pin title="Keep Maestro above other windows" aria-label="Keep Maestro above other windows" aria-pressed="false"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.2 1.5h3.6l-.5 3.2 1.9 1.9H2.8l1.9-1.9zM6 6.6v4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button data-max title="Maximize or restore" aria-label="Maximize or restore"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button><button data-min title="Minimize" aria-label="Minimize"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button><button class="x" data-quit title="Close Maestro (Esc only hides it)" aria-label="Close Maestro"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7m0-7l-7 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></span></div>
   <div id="tabsrow"><div id="tabs" role="tablist"></div><button id="popview" data-popview title="Open this view in a window of its own" aria-label="Open this view in a window of its own"><svg width="13" height="13" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M5 2H2.5A.5.5 0 002 2.5v7a.5.5 0 00.5.5h7a.5.5 0 00.5-.5V7M7 2h3v3M10 2L5.5 6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Own window</span></button></div>
   <div id="body" class="home"><div id="list"></div><div id="view"></div><div id="claude"><div class="cdock"></div><div class="cstage"><div class="cgrid"></div><div class="cover" hidden></div><div class="claunch" hidden></div></div></div></div>
   <div id="foot"><span><kbd>↑</kbd> <kbd>↓</kbd> move</span><span><kbd>Tab</kbd> switch</span><span><kbd>&gt;</kbd> actions</span><span><kbd>Ctrl</kbd> <kbd>E</kbd> edit</span><span><kbd>Ctrl</kbd> <kbd>N</kbd> new</span><span><kbd>Esc</kbd> hide</span><span id="hk"></span><span class="msg" id="msg"></span></div>
@@ -315,9 +317,9 @@ let TABS = ALL_TABS;
 // a tab is shown when the project has something for it: a ledger, registered checks, session drafts, audits or a log are not in every harness
 const FITS = { ship: () => D.ledger.total > 0 || D.project.kit, checks: () => (D.registry || []).length > 0 || !!D.probes, sessions: () => D.sessions.drafts > 0, audit: () => (D.audits || []).length > 0, work: () => D.log.length > 0 };
 function fitTabs() { TABS = D.empty ? [] : ALL_TABS.filter(([k]) => !FITS[k] || FITS[k]() || k === tab); }
-const PAGES = { claude: drawClaude, git: drawGit, ship: drawShip, sessions: drawSessions, checks: drawChecks, hooks: drawHooks, projects: drawProjectsPage, setup: drawSetup, update: drawUpdate };
+const PAGES = { claude: drawClaude, git: drawGit, ship: drawShip, sessions: drawSessions, checks: drawChecks, hooks: drawHooks, projects: drawProjectsPage, setup: drawSetup, update: drawUpdate, remote: drawRemote };
 const keyOf = (h) => h.kind === 'action' ? 'x:' + h.title : h.kind === 'memory' ? 'm:' + h.m.f : h.kind === 'skill' ? `s:${h.sk.scope}/${h.sk.name}` : h.kind === 'rule' ? 'r:' + JSON.stringify(h.ref) : h.kind === 'audit' ? 'a:' + (h.a.path || h.a.slug) : 'w:' + h.e.slug;
-const HINT = { all: 'Search everything, or type > for actions', memory: 'Search memories', skill: 'Search skills', audit: 'Search audits', hooks: 'Filter the hooks', claude: 'Type > for actions', git: 'Filter files or commits', projects: 'Projects', setup: 'Set up a harness', update: 'Updates', rule: 'Search rules', work: 'Search the work log', ship: 'Filter the open rows', sessions: 'Sessions', checks: 'Filter the probes' };
+const HINT = { all: 'Search everything, or type > for actions', memory: 'Search memories', skill: 'Search skills', audit: 'Search audits', hooks: 'Filter the hooks', claude: 'Type > for actions', git: 'Filter files or commits', projects: 'Projects', setup: 'Set up a harness', update: 'Updates', remote: 'Remote access', rule: 'Search rules', work: 'Search the work log', ship: 'Filter the open rows', sessions: 'Sessions', checks: 'Filter the probes' };
 let LEDGER = null, AUDIT = null, PROJ = { names: [], current: 0 };
 const openRows = () => { const st = D.ledger.status || {}; return D.ledger.total - ['shipped', 'verified', 'superseded', 'n/a'].reduce((n, k) => n + (st[k] || 0), 0); };
 let D = null, ITEMS = [], tab = 'all', hits = [], sel = 0, editing = null;
@@ -546,11 +548,34 @@ async function gitShowTreeFile(path) {
 }
 function gitReset() { clearTimeout(G.timer); Object.assign(G, { repos: null, repo: null, sub: 'changes', status: null, log: null, sel: null, commit: null, open: new Set(['']), tree: {}, sig: '', at: 0 }); }
 // ---- the console: Claude Code, Ubuntu and PowerShell sessions, from every project, as tabs and tiles ----
-const CC = { list: [], active: null, n: 0, draft: '', running: [], at: 0, layout: localStorage.getItem('layout') == null ? 0 : Number(localStorage.getItem('layout')), launch: false, proj: null, restored: false, sig: '' };
+const CC = { list: [], active: null, n: 0, draft: '', running: [], at: 0, layout: localStorage.getItem('layout') == null ? 0 : Number(localStorage.getItem('layout')), launch: false, proj: null, restored: false, sig: '', left: new Set(), since: Date.now(), adopting: false };
 const KINDS = { claude: 'Claude Code', ubuntu: WIN ? 'Ubuntu' : 'Shell', powershell: 'PowerShell' };
 const SIGNIN = WIN ? 'when Windows starts' : 'when you sign in';
 const TERM_THEME = { background: 'rgba(0,0,0,0)', foreground: '#e6e9ee', cursor: '#5cc8ff', cursorAccent: '#0a0d12', selectionBackground: 'rgba(92,200,255,0.3)', black: '#1b2028', brightBlack: '#5a6270', red: '#f0605f', brightRed: '#ff8f8a', green: '#3ecf72', brightGreen: '#74e39a', yellow: '#f0b429', brightYellow: '#ffd166', blue: '#5b9cf0', brightBlue: '#8fbcff', magenta: '#c4a7ff', brightMagenta: '#dcc8ff', cyan: '#5cc8ff', brightCyan: '#9be0ff', white: '#c0c6cf', brightWhite: '#ffffff' };
 const ccGet = (id) => CC.list.find((x) => x.id === id);
+const DRAG = { id: null, x: 0, on: false, t: 0, block: 0 };
+// A session moves to another slot: its tab, its tile and its Alt+number follow. The order of the sessions that outlive the app is kept for next time.
+function ccMove(id, to) {
+  const from = CC.list.findIndex((x) => x.id === id); to = Math.max(0, Math.min(CC.list.length - 1, to)); if (from < 0 || from === to) return;
+  const strip = $('.cdock .tabs'); const was = new Map(); if (strip) for (const b of strip.children) if (b.dataset.csel) was.set(b.dataset.csel, b.getBoundingClientRect().left);
+  CC.list.splice(to, 0, CC.list.splice(from, 1)[0]); DRAG.t = Date.now();
+  try { localStorage.setItem('order', JSON.stringify(CC.list.map((x) => x.name).filter(Boolean))); } catch (_) {}
+  drawDock(); ccLayout();
+  if (strip && !matchMedia('(prefers-reduced-motion: reduce)').matches) for (const b of strip.children) { const dx = was.get(b.dataset.csel) - b.getBoundingClientRect().left; if (dx) b.animate([{ transform: `translateX(${dx}px)` }, { transform: 'none' }], { duration: 140, easing: 'ease-out' }); }
+}
+// Dragging a tab. Pointer events, because the tabs are redrawn every second and a native drag would lose the element it started on.
+function dragEnd() { if (!DRAG.id) return; const was = DRAG.on; DRAG.id = null; DRAG.on = false; if (!was) return; DRAG.block = Date.now() + 80; document.body.classList.remove('dragging'); drawDockTabs(); const x = ccGet(CC.active); if (x && tab === 'claude' && CC.layout !== 0 && !CC.launch) x.term.focus(); }
+document.addEventListener('pointerdown', (e) => { const b = e.button === 0 && e.target.closest && e.target.closest('.stab'); if (!b || e.target.closest('[data-cclose]')) return; DRAG.id = b.dataset.csel; DRAG.x = e.clientX; DRAG.on = false; });
+document.addEventListener('pointermove', (e) => {
+  if (!DRAG.id) return; if (!(e.buttons & 1)) return dragEnd();
+  if (!DRAG.on) { if (Math.abs(e.clientX - DRAG.x) < 6) return; DRAG.on = true; document.body.classList.add('dragging'); drawDockTabs(); }
+  const strip = $('.cdock .tabs'); const from = CC.list.findIndex((x) => x.id === DRAG.id); if (!strip || from < 0) return dragEnd();
+  const sr = strip.getBoundingClientRect(); if (e.clientX < sr.left + 28) strip.scrollLeft -= 14; else if (e.clientX > sr.right - 28) strip.scrollLeft += 14;
+  if (Date.now() - DRAG.t < 150) return; // the tabs are still sliding from the last move
+  for (const b of strip.children) { const r = b.getBoundingClientRect(); if (!b.dataset.csel || e.clientX < r.left || e.clientX > r.right) continue; const to = CC.list.findIndex((x) => x.id === b.dataset.csel); const mid = r.left + r.width / 2; if ((to > from && e.clientX > mid) || (to < from && e.clientX < mid)) ccMove(DRAG.id, to); break; }
+});
+document.addEventListener('pointerup', dragEnd); document.addEventListener('pointercancel', dragEnd);
+document.addEventListener('click', (e) => { if (Date.now() < DRAG.block) { e.stopPropagation(); e.preventDefault(); } }, true); // letting go of a dragged tab is not a click on it
 const ccProj = () => (CC.proj == null || CC.proj >= PROJ.names.length ? PROJ.current : CC.proj);
 const KICON = {
   claude: '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1.2v9.6M1.2 6h9.6M2.6 2.6l6.8 6.8M9.4 2.6L2.6 9.4" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/></svg>',
@@ -600,6 +625,7 @@ function ccChord(e) {
   if (k === 'l') { ccSetLayout({ 0: 1, 1: 2, 2: 4, 4: 6, 6: 0 }[CC.layout] ?? 1); return true; }
   if (k === 'a') { ccSetLayout(0); return true; }
   if (k === 'k') { ccLauncher(true); return true; }
+  if (k === 'pageup' || k === 'pagedown') { const i = CC.list.findIndex((x) => x.id === CC.active); if (i >= 0) { ccMove(CC.active, i + (k === 'pageup' ? -1 : 1)); const b = $('.cdock .tabs .stab.on'); if (b) b.scrollIntoView({ inline: 'nearest', block: 'nearest' }); } return true; }
   return false;
 }
 // Highlighted text goes to the clipboard: by the page if it may, else through the app.
@@ -629,7 +655,7 @@ function makeTerm(el, chords) {
 function ccFit(x) { if (!x || x.tile.hidden || !x.body.offsetWidth) return; try { x.fit.fit(); } catch (_) {} }
 function ccLayout() {
   const grid = $('.cgrid'); if (!grid) return; const cover = $('.cover'); const starting = CC.launch || !CC.list.length; grid.hidden = starting; if (starting) { cover.hidden = true; return; } cover.hidden = CC.layout !== 0; if (CC.layout === 0) { CC.list.forEach((x) => { x.tile.hidden = true; }); return drawOverview(); } const n = CC.layout; const i = Math.max(0, CC.list.findIndex((x) => x.id === CC.active)); const page = Math.floor(i / n); let shown = 0;
-  CC.list.forEach((x, k) => { const on = Math.floor(k / n) === page; x.tile.hidden = !on; if (on) shown++; x.tile.classList.toggle('on', x.id === CC.active && (n > 1)); });
+  CC.list.forEach((x, k) => { const on = Math.floor(k / n) === page; x.tile.hidden = !on; x.tile.style.order = k; if (on) shown++; x.tile.classList.toggle('on', x.id === CC.active && (n > 1)); });
   const cols = shown <= 1 ? 1 : n === 2 ? 2 : shown <= 4 ? 2 : 3; grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`; grid.style.gridTemplateRows = `repeat(${Math.max(1, Math.ceil(shown / cols))}, minmax(0, 1fr))`;
   requestAnimationFrame(() => CC.list.forEach(ccFit));
 }
@@ -643,7 +669,7 @@ function tileHead(x) { const st = stateOf(x); x.head.innerHTML = `${kindMark(x.k
 function drawDockTabs() {
   const el = $('.cdock .tabs'); if (!el) return; const armed = CC.arm && Date.now() < CC.arm.until ? CC.arm.id : null;
   el.innerHTML = CC.list.map((x, i) => { const st = stateOf(x); const pk = st === 'ended' ? { now: '' } : peek(x); const doing = st === 'working' ? (pk.now || 'Working…') : st === 'idle' && x.kind !== 'claude' ? (pk.now || 'Idle') : sayState(x, st);
-    return `<div class="stab ${st} ${x.id === CC.active && !CC.launch && CC.layout !== 0 ? 'on' : ''}" role="button" tabindex="0" data-csel="${x.id}" title="${esc(x.label)}${x.asked && x.asked !== x.label ? '\nAsked: ' + esc(x.asked) : ''}\n${esc(doing)}\n${esc(x.project)} · ${esc(KINDS[x.kind])}"><span class="num">${i < 9 ? i + 1 : ''}</span>${kindMark(x.kind)}<span class="tx"><span class="t">${esc(x.label)}</span><span class="n"><span class="w">${esc(doing)}</span> · ${esc(x.project)}</span></span><span class="tc ${armed === x.id ? 'sure' : ''}" data-cclose="${x.id}" title="${x.live ? 'End this session (click twice)' : 'Remove'}">${armed === x.id ? 'End?' : '×'}</span></div>`; }).join('') || '<span class="dim" style="padding:6px 4px">No session is open. Start one below.</span>';
+    return `<div class="stab ${st} ${x.id === CC.active && !CC.launch && CC.layout !== 0 ? 'on' : ''}${DRAG.on && DRAG.id === x.id ? ' drag' : ''}" role="button" tabindex="0" data-csel="${x.id}" title="${esc(x.label)}${x.asked && x.asked !== x.label ? '\nAsked: ' + esc(x.asked) : ''}\n${esc(doing)}\n${esc(x.project)} · ${esc(KINDS[x.kind])}\nDrag to move it (Ctrl+Shift+PageUp / PageDown)"><span class="num">${i < 9 ? i + 1 : ''}</span>${kindMark(x.kind)}<span class="tx"><span class="t">${esc(x.label)}</span><span class="n"><span class="w">${esc(doing)}</span> · ${esc(x.project)}</span></span><span class="tc ${armed === x.id ? 'sure' : ''}" data-cclose="${x.id}" title="${x.live ? 'End this session (click twice)' : 'Remove'}">${armed === x.id ? 'End?' : '×'}</span></div>`; }).join('') || '<span class="dim" style="padding:6px 4px">No session is open. Start one below.</span>';
 }
 function drawDock() {
   const dock = $('.cdock'); if (!dock) return;
@@ -689,7 +715,7 @@ function ccTyped(x, d) {
   if (d >= ' ') x.typing = (x.typing + d).slice(-2000);
 }
 // take a session off the screen; `end` also stops the program (a Claude or Ubuntu session otherwise keeps running in WSL)
-function ccEnd(id, end = true) { const x = ccGet(id); if (!x) return; const i = CC.list.indexOf(x); invoke('term_close', { id, name: x.name || null, end }).catch(() => {}).then(() => setTimeout(ccRefresh, 600)); x.live = false; x.term.dispose(); x.tile.remove(); CC.list.splice(i, 1); if (CC.active === id) CC.active = (CC.list[Math.min(i, CC.list.length - 1)] || {}).id || null; drawTabs(); drawClaude(); const y = ccGet(CC.active); if (y && tab === 'claude') y.term.focus(); }
+function ccEnd(id, end = true) { const x = ccGet(id); if (!x) return; if (!end && x.name) CC.left.add(x.name); const i = CC.list.indexOf(x); invoke('term_close', { id, name: x.name || null, end }).catch(() => {}).then(() => setTimeout(ccRefresh, 600)); x.live = false; x.term.dispose(); x.tile.remove(); CC.list.splice(i, 1); if (CC.active === id) CC.active = (CC.list[Math.min(i, CC.list.length - 1)] || {}).id || null; drawTabs(); drawClaude(); const y = ccGet(CC.active); if (y && tab === 'claude') y.term.focus(); }
 async function ccPop(id) { const x = ccGet(id); if (!x) return; if (!x.keeps || !x.live || !x.name) return say('Only a running session that outlives Maestro can have a window of its own', 'bad'); try { await invoke('pop_out', { name: x.name, kind: x.kind, label: `${x.label} · ${x.project}` }); ccEnd(id, false); } catch (e) { say(String(e), 'bad'); } }
 function ccLauncher(on) { CC.launch = on; drawClaude(); if (on) { const ta = $('#cprompt'); if (ta) ta.focus(); } else { const x = ccGet(CC.active); if (x) x.term.focus(); } }
 function drawLauncher() {
@@ -788,7 +814,21 @@ T.event.listen('term-exit', (e) => { const x = ccGet(e.payload.id); if (!x) retu
 // a session that was working and has gone quiet while you were not looking has finished, or is waiting for you: say so on the taskbar
 setInterval(() => { if (!CC.list.length) return; for (const x of CC.list) { const st = stateOf(x); if (x.was === 'working' && st !== 'working' && x.live && !ccWatching(x) && Date.now() - x.at.getTime() > 8000) { x.done = true; x.unseen = true; invoke('attention').catch(() => {}); } if (ccWatching(x) && st !== 'working') { x.unseen = false; x.done = false; x.bell = false; } x.was = stateOf(x) === 'working' ? 'working' : 'quiet'; } const sig = CC.list.map((x) => x.id + stateOf(x)).join('|') + CC.active + CC.layout + CC.launch; if (sig !== CC.sig) { drawDock(); drawTabs(); } }, 700);
 // the sessions that were running when Maestro closed come back by themselves
-async function ccRestore() { if (CC.restored) return; CC.restored = true; await ccRefresh(); const back = (CC.running || []).filter((r) => !r.attached).slice(0, 9); for (const r of back) await ccStart(r.kind === 'claude' ? 'claude' : 'ubuntu', { mode: 'attach', name: r.name, label: r.label || r.name, project: r.path.split('/').pop(), quiet: true }); if (back.length) say(`${back.length} session${back.length === 1 ? ' is' : 's are'} still running: see Console`, 'ok'); }
+// A session started somewhere else while this window is open (from a paired phone, say) gets a tab here as well. Not one that
+// was taken off this window on purpose, and not while a session of this window's own is still being started.
+async function ccAdopt() {
+  if (POP || VIEW || !CC.restored || CC.adopting || document.hidden) return; CC.adopting = true;
+  try {
+    await ccRefresh(); if (CC.list.some((x) => x.live && x.keeps && !x.name)) return;
+    const have = new Set(CC.list.map((x) => x.name).filter(Boolean));
+    const fresh = (CC.running || []).filter((r) => !have.has(r.name) && !CC.left.has(r.name) && r.created * 1000 > CC.since - 5000).slice(0, 6);
+    for (const r of fresh) await ccStart(r.kind === 'claude' ? 'claude' : 'ubuntu', { mode: 'attach', name: r.name, label: r.label || r.name, project: r.path.split('/').pop(), quiet: true });
+    if (fresh.length) say(fresh.length === 1 ? `${fresh[0].label || 'A session'} was started from another device: see Console` : `${fresh.length} sessions were started from another device: see Console`, 'ok');
+  } catch (_) {} finally { CC.adopting = false; }
+}
+setInterval(ccAdopt, 10000);
+async function ccRestore() { if (CC.restored) return; CC.restored = true; await ccRefresh(); let order = []; try { order = JSON.parse(localStorage.getItem('order') || '[]'); } catch (_) {} const slot = (r) => { const i = order.indexOf(r.name); return i < 0 ? 1e9 : i; };
+  const back = (CC.running || []).filter((r) => !r.attached).sort((a, b) => slot(a) - slot(b)).slice(0, 9); for (const r of back) await ccStart(r.kind === 'claude' ? 'claude' : 'ubuntu', { mode: 'attach', name: r.name, label: r.label || r.name, project: r.path.split('/').pop(), quiet: true }); if (back.length) say(`${back.length} session${back.length === 1 ? ' is' : 's are'} still running: see Console`, 'ok'); }
 function popView(k) { const name = k === 'projects' ? 'Projects' : tabName(k); invoke('pop_view', { tab: k, title: `${name} · ${D.project.name}` }).then(() => say(`${name} opened in its own window`, 'ok')).catch((e) => say(String(e), 'bad')); }
 function actions() {
   const A = [];
@@ -804,6 +844,7 @@ function actions() {
   PROJ.names.forEach((n, i) => { if (i !== PROJ.current) add(`Open ${n}`, 'Switch project', () => setProject(i)); });
   add('Add or remove a project', 'The list of folders this app opens', () => { FOUND = null; setTab('projects'); });
   add('Check for updates', `This is Maestro ${UPD.current || ''}. Asks GitHub whether a newer release is out`, () => { UPD.checked = false; setTab('update'); });
+  add('Remote access', 'Reach your sessions from your phone or another computer, over your own private network', () => setTab('remote'));
   add('Set up a starter harness', 'Instructions, rules, a work log and three skills, written only where they are missing', () => { PLAN = null; setTab('setup'); });
   if (D.project.kit) add('Run the probe audit', 'About twenty seconds; shows which passes still count', () => { setTab('checks'); const b = $('[data-audit]'); if (b) b.click(); });
   add('Read the files again', 'Reload everything from disk', () => reload().then(() => { drawList(); say('Read again from the files', 'ok'); }));
@@ -1009,6 +1050,30 @@ async function drawUpdate() {
   <p class="dim" style="max-width:78ch;margin-top:6px">Off, Maestro never uses the network on its own; it asks only when you open this screen. On, it asks GitHub once at each start which release is the latest. Nothing about you or your projects is sent.</p>`;
 }
 
+// Remote access: off unless it is turned on here. The page says what it opens and to whom before anything is opened.
+let REMOTE = null;
+async function drawRemote(r) {
+  const v = $('#view'); const head = `<h1>Remote access</h1>`;
+  if (!r) { try { r = await invoke('remote_state'); } catch (e) { v.innerHTML = `${head}<p class="bad">${esc(String(e))}</p>`; return; } if (tab !== 'remote') return; }
+  REMOTE = r; remotePill(r);
+  const when = (t) => t ? new Date(t * 1000).toISOString().slice(0, 10) : '';
+  const steps = `<ol class="dim" style="max-width:78ch;margin:0 0 12px;padding-left:20px"><li>Install <b>Tailscale</b> on this computer and on the phone or computer you want to use, and sign in to the same account on both. It joins them into a private network of your own that works from any connection.</li><li>Turn remote access on here, press <b>Pair a device</b>, and scan the code with the phone (or open the link on the other computer).</li><li>On a phone, add the page to the home screen: it then opens like an app.</li></ol>`;
+  const devices = (r.devices || []).map((d) => `<div class="row" style="gap:10px;padding:6px 0;border-top:1px solid var(--line)"><b style="min-width:16ch">${esc(d.name)}</b><span class="${d.live ? '' : 'dim'}" style="flex:1;${d.live ? 'color:var(--ok)' : ''}">${d.live ? 'connected now' : d.expired ? `away too long: has to pair again` : `last seen ${esc(when(d.seen))}`} <span class="dim">· paired ${esc(when(d.added))}</span></span><button class="act" data-remote="forget" data-id="${esc(d.id)}">Remove</button></div>`).join('');
+  v.innerHTML = `${head}<p class="lead">Your running sessions on your phone or another computer: see what each one is doing, answer it, or open it as a full terminal. ${r.running ? '<b>It is on.</b>' : 'It is off.'}</p>
+  <div class="row" style="margin-bottom:12px"><button class="act${r.running ? '' : ' go'}" data-remote="${r.running ? 'off' : 'on'}">${r.running ? 'Turn it off' : 'Turn it on'}</button>${r.running && r.tailscale ? `<button class="act${r.pair ? '' : ' go'}" data-remote="pair">${r.pair ? 'Make a new code' : 'Pair a device'}</button>` : ''}</div>
+  ${r.pair ? `<div class="row" style="align-items:flex-start;gap:18px;margin-bottom:14px"><div style="background:#fff;border-radius:10px;padding:6px;line-height:0">${r.pair.qr}</div><div style="min-width:0;max-width:52ch"><p style="margin:0 0 6px">Scan this with the phone's camera, or open the link on the other device. It pairs <b>one device</b> and stops working after ${Math.max(1, Math.round(r.pair.left / 60))} minute${Math.round(r.pair.left / 60) > 1 ? 's' : ''}.</p><div class="row"><button class="act" data-remote="copy">Copy the link</button></div><p class="dim" style="margin:8px 0 0">The device has to be signed in to your Tailscale network.</p></div></div>` : ''}
+  ${r.running && !r.tailscale ? `<p class="bad" style="max-width:78ch">Tailscale is not running on this computer, so no other device can reach it yet.</p>` : ''}
+  ${r.running && r.firewall && r.firewall !== 'ok' ? `<p class="bad" style="max-width:78ch;margin-bottom:6px">Windows Firewall ${r.firewall === 'blocked' ? 'has a rule that blocks Maestro' : 'has no rule that lets your Tailscale devices reach Maestro'}, so a phone will not get through.</p><div class="row" style="margin-bottom:12px"><button class="act go" data-remote="allow">Allow it through Windows Firewall</button><span class="dim">Windows asks for permission. The rule covers this program, port ${esc(r.port)}, from Tailscale addresses only.</span></div>` : ''}
+  ${!r.running || !r.tailscale ? steps : ''}
+  ${r.running && r.tailscale && r.secure ? `<h3 class="sec">Notifications on a phone</h3><p class="dim" style="max-width:78ch;margin:0 0 8px">A phone lets a page send notifications only from a secure address. Tailscale can give Maestro one, with a certificate of its own. ${r.secure.on ? `It is on: <b>https://${esc(r.secure.name)}</b>. A device paired at the old address pairs once more, with a new code; notifications are then turned on from the page (···).` : ''}</p><div class="row" style="margin-bottom:10px"><button class="act" data-remote="${r.secure.on ? 'secure-off' : 'secure-on'}">${r.secure.on ? 'Turn the secure address off' : 'Turn the secure address on'}</button>${r.secure.note && /https:\/\/\S+/.test(r.secure.note) ? '<button class="act" data-remote="copynote">Copy the link</button>' : ''}</div>${r.secure.note ? `<p class="bad" style="max-width:78ch;overflow-wrap:anywhere">Tailscale says: ${esc(r.secure.note)}</p>` : ''}` : ''}
+  ${devices ? `<h3 class="sec">Paired devices</h3><div style="max-width:78ch;margin-bottom:14px">${devices}</div>` : r.running ? `<p class="dim">No device is paired.</p>` : ''}
+  <p class="dim" style="max-width:78ch">On, Maestro listens on port ${esc(r.port)} and answers only what arrives over your Tailscale network, and only a device that is paired. A paired device can type into your sessions, which is as much as sitting at this computer: pair only your own, and remove one that is lost. Every pairing, connection and refusal is written to maestro.log. Only sessions that outlive the app can be reached, and Maestro has to be running (hidden is fine). Off, nothing listens.</p>`;
+}
+// A device is connected from elsewhere: say so wherever you are in the app, not only on the Remote screen.
+function remotePill(r) { const n = (r.devices || []).reduce((a, d) => a + (d.live ? 1 : 0), 0); const el = $('#remote'); if (!el) return; el.hidden = !n; el.textContent = n ? `${n} remote` : ''; el.title = n ? `Connected from elsewhere: ${(r.devices || []).filter((d) => d.live).map((d) => d.name).join(', ')}. Click to see or remove.` : ''; }
+const remoteCheck = () => invoke('remote_state').then((r) => { REMOTE = r; remotePill(r); if (tab === 'remote') drawRemote(r); }).catch(() => {});
+T.event.listen('remote', (e) => { const { what, name } = e.payload || {}; if (what === 'paired') say(`${name} is now paired for remote access`, 'ok'); if (what === 'refused') say('Remote access refused a device: a wrong, used or expired code', 'bad'); if (what === 'session') return void setTimeout(ccAdopt, 1500); remoteCheck(); });
+
 // The starter harness: what would be written, shown before anything is. Files that exist are never replaced.
 async function drawSetup() {
   const v = $('#view');
@@ -1089,6 +1154,8 @@ document.addEventListener('click', (e) => {
   if (t.closest('[data-browse]')) return invoke('pick_folder').then((f) => { if (f) look(f); }).catch((err) => say(String(err), 'bad'));
   if (t.closest('[data-look]')) return look($('#p-folder').value);
   if (t.closest('[data-addproj]')) return invoke('add_project', { folder: FOUND.typed, name: $('#p-name').value, runs: FOUND.entry.runs }).then(async (at) => { FOUND = null; LEDGER = null; AUDIT = null; PLAN = null; gitReset(); tab = 'all'; await drawProjects(); await reload(); if (D.project.bare) tab = 'setup'; fitTabs(); nameView(); drawTabs(); drawList(); say(`Added and opened ${PROJ.names[at]}`, 'ok'); $('#q').focus(); }).catch((err) => say(String(err), 'bad'));
+  if (t.closest('[data-remote]')) { const b = t.closest('[data-remote]'); const what = b.dataset.remote; if (what === 'copy') return copyText(REMOTE && REMOTE.pair ? REMOTE.pair.url : ''); if (what === 'copynote') return copyText(((REMOTE && REMOTE.secure && REMOTE.secure.note || '').match(/https:\/\/\S+/) || [''])[0]); if (what === 'secure-on' || what === 'secure-off') { b.disabled = true; b.textContent = 'Asking Tailscale…'; return invoke('remote_secure', { on: what === 'secure-on' }).then((r) => { remotePill(r); if (tab === 'remote') drawRemote(r); if (r.secure && !r.secure.note) say(r.secure.on ? 'The secure address is on' : 'The secure address is off', 'ok'); }).catch((err) => { b.disabled = false; say(String(err), 'bad'); if (tab === 'remote') drawRemote(); }); } if (what === 'forget' && !b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Confirm: remove'; return; } b.disabled = true; const call = what === 'allow' ? invoke('remote_allow') : what === 'pair' ? invoke('remote_pair') : what === 'forget' ? invoke('remote_forget', { id: b.dataset.id }) : invoke('remote_set', { on: what === 'on' }); return call.then((r) => { remotePill(r); if (tab === 'remote') drawRemote(r); if (what === 'allow') say('Windows Firewall now lets your Tailscale devices reach Maestro', 'ok'); if (what === 'on' || what === 'off') say(what === 'off' ? 'Remote access is off' : 'Remote access is on', 'ok'); }).catch((err) => { b.disabled = false; say(String(err), 'bad'); }); }
+  if (t.closest('#remote')) return setTab('remote');
   if (t.closest('[data-updagain]')) { UPD.checked = false; return drawUpdate(); }
   if (t.closest('[data-updpage]')) return invoke('update_page', { tag: t.closest('[data-updpage]').dataset.updpage }).catch((err) => say(String(err), 'bad'));
   if (t.closest('[data-updgo]')) { const b = t.closest('[data-updgo]'); if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = `Confirm: install ${UPD.latest} and restart now`; return; } b.disabled = true; b.textContent = 'Downloading…'; return invoke('update_install').then((tag) => say(`Installed ${tag}; restarting`, 'ok')).catch((err) => { b.disabled = false; delete b.dataset.sure; b.textContent = `Install ${UPD.latest} and restart`; say(String(err), 'bad'); }); }
@@ -1143,7 +1210,7 @@ T.event.listen('shown', () => { G.seen = true; if (tab === 'git') gitCheck(true)
 const POP = window.__POP || null; const VIEW = window.__VIEW || null;
 if (VIEW) { document.body.classList.add('view'); tab = VIEW.tab; }
 const nameView = () => { if (VIEW && document.getElementById('vtitle')) document.getElementById('vtitle').textContent = tab === 'projects' ? 'Projects' : tab === 'all' ? 'Home' : tabName(tab); };
-const tabName = (k) => k === 'setup' ? 'Set up a harness' : k === 'update' ? 'Updates' : (ALL_TABS.find(([x]) => x === k) || [k, k])[1];
+const tabName = (k) => k === 'setup' ? 'Set up a harness' : k === 'update' ? 'Updates' : k === 'remote' ? 'Remote access' : (ALL_TABS.find(([x]) => x === k) || [k, k])[1];
 if (POP) {
   document.body.classList.add('pop'); const el = document.createElement('div'); el.className = 'popterm'; document.body.appendChild(el);
   const id = `p${Math.random().toString(36).slice(2, 9)}`; const { term, fit } = makeTerm(el, null); let live = true;
@@ -1154,6 +1221,7 @@ if (POP) {
   term.onResize(({ cols, rows }) => { if (live) invoke('term_resize', { id, cols, rows }).catch(() => {}); });
   requestAnimationFrame(() => requestAnimationFrame(() => { refit(); invoke('term_open', { id, kind: POP.kind === 'claude' ? 'claude' : 'ubuntu', mode: 'attach', proj: null, name: POP.name, session: null, prompt: null, label: POP.label, cols: term.cols, rows: term.rows }).catch((e) => term.write(`\r\n\x1b[31m${String(e)}\x1b[0m\r\n`)); term.focus(); }));
 }
+if (!POP) remoteCheck();
 if (!POP) invoke('update_state').then((u) => { UPD = { ...UPD, ...(u || {}) }; if (UPD.auto && !VIEW) updCheck(true).then(() => { if (UPD.newer && tab === 'all' && !$('#q').value) drawList(); }); }).catch(() => {});
 if (!POP) drawProjects().then(reload).then(() => { nameView(); if (!VIEW && !D.empty) { ccRestore().catch(() => {}); try { boot(false); } catch (e) { trouble(`boot: ${e.stack || e}`); } try { if (localStorage.getItem('pin') === '1') { invoke('set_on_top', { on: true }); $('[data-pin]').setAttribute('aria-pressed', 'true'); } } catch (_) {} } $('#hk').innerHTML = `<kbd>${esc(D.hotkey || 'Ctrl+Shift+Space')}</kbd> anywhere`; drawList(); $('#q').focus(); }).catch((e) => { $('#view').innerHTML = `<p class="bad">${esc(String(e))}</p>`; });
 </script>

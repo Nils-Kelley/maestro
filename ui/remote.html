@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e0e10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Maestro">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="xterm.css">
+<title>Maestro</title>
+<!--
+  Maestro from another device: the running sessions as a list, and each one as a conversation or a full terminal.
+  Served by the app when remote access is on (docs/remote.md). It talks to the app over one WebSocket:
+    page → app   hello {token} or hello {pair, name} · list · chat {name, after} · say {name, text, enter} · end {name}
+                 open {id, name, cols, rows} · new {id, kind, proj, prompt, cols, rows} · in {id, data} · size {id, cols, rows} · close {id}
+                 push {sub} or push {off}
+    app → page   hello {host, token?, vapid?} · denied · list {sessions, projects} · chat {name, found, reset, items} · browser {name, state, page, pages} · frame {name, n, data, w, h}
+                 opened {id, name} · out {id, data} · exit {id} · err {id, text}
+-->
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0e0e10; --group: #18181b; --raised: #202024; --press: #2a2a2f; --line: rgba(255, 255, 255, 0.09);
+  --fg: #f4f4f5; --two: #a1a1aa; --three: #71717a;
+  --accent: #6cb8f6; --on-accent: #06141f; --warn: #e5a93a; --bad: #ef6461; --ok: #4fbf7a;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "Cascadia Mono", Menlo, Consolas, monospace;
+  --ease: cubic-bezier(0.25, 0.85, 0.3, 1);
+  --h: 100dvh; --st: env(safe-area-inset-top); --sb: env(safe-area-inset-bottom); --sl: env(safe-area-inset-left); --sr: env(safe-area-inset-right);
+  --pad: 20px;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 17px/1.35 var(--sans); -webkit-font-smoothing: antialiased; overscroll-behavior: none; -webkit-text-size-adjust: 100%; }
+body { position: fixed; inset: 0 0 auto 0; height: var(--h); overflow: hidden; }
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: 0; padding: 0; text-align: inherit; touch-action: manipulation; }
+[hidden] { display: none !important; }
+svg { display: block; }
+h1, h2, h3, p { margin: 0; }
+
+/* ---- two screens: the sessions, and one session ---- */
+#app { position: absolute; inset: 0; }
+#home { position: absolute; inset: 0; display: flex; flex-direction: column; transition: transform 0.32s var(--ease); }
+#view { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); transform: translateX(100%); visibility: hidden; transition: transform 0.32s var(--ease), visibility 0s 0.32s; }
+body.viewing #view { transform: none; visibility: visible; transition: transform 0.32s var(--ease), visibility 0s; }
+body.viewing #home { transform: translateX(-25%); }
+
+.nav { flex: none; display: flex; align-items: flex-end; gap: 4px; padding: calc(14px + var(--st)) calc(10px + var(--sr)) 6px calc(var(--pad) + var(--sl)); }
+.nav h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.022em; line-height: 1.1; }
+.nav .host { color: var(--three); font-size: 14px; margin-top: 3px; }
+.nav .grow { flex: 1; min-width: 0; }
+.tool { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; color: var(--accent); flex: none; } .tool:active { opacity: 0.5; }
+.offline { flex: none; margin: 4px calc(var(--pad) + var(--sr)) 0 calc(var(--pad) + var(--sl)); color: var(--warn); font-size: 14px; }
+
+.scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: calc(28px + var(--sb)); } .scroll::-webkit-scrollbar { display: none; }
+.sect { position: sticky; top: 0; z-index: 1; display: flex; align-items: baseline; gap: 8px; padding: 18px calc(var(--pad) + var(--sr)) 7px calc(var(--pad) + var(--sl)); background: var(--bg); color: var(--two); font-size: 14px; font-weight: 600; }
+.sect i { font-style: normal; font-weight: 400; color: var(--three); } .sect.needs { color: var(--warn); }
+.row { position: relative; padding: 0 calc(var(--pad) + var(--sr)) 0 calc(var(--pad) + var(--sl)); }
+.row::after { content: ""; position: absolute; left: calc(var(--pad) + var(--sl)); right: 0; bottom: 0; height: 1px; background: var(--line); }
+.row .open { display: block; width: 100%; padding: 13px 0 12px; } .row .open:active { opacity: 0.55; }
+.row.on { background: var(--group); }
+.row .t { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 600; letter-spacing: -0.01em; }
+.row .meta { display: block; margin-top: 2px; color: var(--two); font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .now { display: flex; align-items: center; gap: 8px; margin-top: 7px; color: var(--two); font-size: 15px; } .row .now span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .tail { margin: 7px 0 0; font: 12.5px/1.5 var(--mono); color: var(--three); white-space: pre; overflow: hidden; max-height: 3em; display: flex; flex-direction: column; justify-content: flex-end; -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); mask-image: linear-gradient(90deg, #000 88%, transparent); }
+.row.needs .tail { color: var(--two); max-height: 4.5em; }
+.row .acts { display: flex; gap: 22px; padding: 0 0 12px; margin-top: -3px; } .row .acts button { color: var(--accent); font-size: 15px; padding: 11px 0; margin: -7px 0; min-width: 44px; } .row .acts button:active { opacity: 0.5; }
+.spin { flex: none; width: 13px; height: 13px; border-radius: 50%; border: 1.6px solid rgba(255, 255, 255, 0.2); border-top-color: var(--two); animation: spin 0.8s linear infinite; }
+.empty { color: var(--three); padding: 80px 40px; text-align: center; font-size: 16px; line-height: 1.45; } .empty b { display: block; color: var(--two); font-weight: 600; margin-bottom: 4px; }
+
+/* answers: a question Claude Code asks before it does something */
+.choices { margin: 0 0 12px; border-radius: 12px; background: var(--group); overflow: hidden; }
+.choices button { display: flex; gap: 12px; align-items: baseline; width: 100%; padding: 12px 14px; font-size: 16px; border-top: 1px solid var(--line); } .choices button:first-child { border-top: 0; }
+.choices button:active { background: var(--press); } .choices button span { min-width: 0; }
+.choices button i { flex: none; font: 13px var(--mono); font-style: normal; color: var(--three); }
+.choices button:first-child span { color: var(--accent); font-weight: 600; }
+
+/* ---- one session ---- */
+.vhead { flex: none; display: flex; align-items: center; gap: 2px; padding: calc(6px + var(--st)) calc(6px + var(--sr)) 6px calc(4px + var(--sl)); border-bottom: 1px solid var(--line); min-width: 0; }
+.vhead .tt { min-width: 0; flex: 1; display: grid; padding-left: 2px; } .vhead .t { font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.01em; }
+.vhead .n { color: var(--three); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .vhead .n.asks { color: var(--warn); }
+.modes { flex: none; display: flex; padding: 2px; border-radius: 9px; background: var(--raised); margin: 0 2px; }
+/* the ways to show a session do not fit beside its name on a phone: they get a line of their own */
+@media (max-width: 520px) { .vhead { flex-wrap: wrap; } .vhead .modes { order: 5; flex: 1 0 calc(100% - 16px); margin: 6px 8px 2px; } .vhead .modes button { flex: 1; text-align: center; padding: 8px 0; font-size: 14.5px; } }
+.modes button { padding: 5px 11px; border-radius: 7px; font-size: 13.5px; color: var(--two); } .modes button[aria-pressed=true] { background: #3a3a41; color: var(--fg); font-weight: 600; }
+.body { flex: 1; min-height: 0; min-width: 0; position: relative; }
+.tbody { position: absolute; inset: 0; padding: 6px 2px 2px 8px; overflow: hidden; touch-action: none; background: #0b0b0d; }
+.tbody .term { width: 100%; height: 100%; }
+.starting { position: absolute; inset: 0; z-index: 2; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 30px; text-align: center; background: #0b0b0d; color: var(--two); transition: opacity 0.25s; } .starting.off { opacity: 0; pointer-events: none; }
+.starting .spin { width: 22px; height: 22px; margin-bottom: 6px; } .starting b { color: var(--fg); font-size: 18px; font-weight: 600; } .starting span { font-size: 15px; line-height: 1.4; max-width: 30ch; }
+.xterm-viewport { background: transparent !important; scrollbar-width: none; } .xterm-viewport::-webkit-scrollbar { display: none; }
+.chat { position: absolute; inset: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding: 16px calc(var(--pad) + var(--sr)) 18px calc(var(--pad) + var(--sl)); } .chat::-webkit-scrollbar { display: none; }
+.msgs { display: flex; flex-direction: column; gap: 14px; max-width: 760px; margin: 0 auto; } .m { min-width: 0; max-width: 100%; }
+.m.user { align-self: flex-end; max-width: 86%; padding: 9px 14px; border-radius: 18px; background: var(--raised); white-space: pre-wrap; overflow-wrap: anywhere; }
+.m.assistant { overflow-wrap: anywhere; line-height: 1.5; }
+.m.assistant > :first-child { margin-top: 0; } .m.assistant > :last-child { margin-bottom: 0; }
+.m.assistant p { margin: 0 0 10px; } .m.assistant h4 { margin: 16px 0 6px; font-size: 17px; } .m.assistant ul, .m.assistant ol { margin: 0 0 10px; padding-left: 22px; } .m.assistant li { margin: 3px 0; }
+.m.assistant code { font: 0.86em var(--mono); background: var(--raised); border-radius: 5px; padding: 1.5px 5px; }
+.m.assistant pre { margin: 0 0 10px; padding: 11px 13px; border-radius: 10px; background: var(--group); overflow-x: auto; font: 13px/1.5 var(--mono); } .m.assistant pre code { background: none; padding: 0; font-size: 1em; }
+.m.assistant a { color: var(--accent); text-decoration: none; }
+.m.tools { color: var(--three); font-size: 14px; } .m.tools summary { list-style: none; cursor: pointer; overflow-wrap: anywhere; } .m.tools summary::-webkit-details-marker { display: none; }
+.m.tools div { margin-top: 6px; font: 12.5px/1.55 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m.busy { display: flex; align-items: center; gap: 9px; color: var(--two); font-size: 15px; }
+/* the page a session's browser is showing: a picture of it, as wide as the screen, that can be pinched larger and moved about */
+.web { position: absolute; inset: 0; display: flex; flex-direction: column; background: #0b0b0d; }
+.wbar { flex: none; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px calc(var(--pad) + var(--sr)) 8px calc(var(--pad) + var(--sl)); border-bottom: 1px solid var(--line); background: var(--bg); color: var(--three); font-size: 13.5px; }
+.wbar svg { flex: none; } .wbar span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .wbar b { color: var(--fg); font-weight: 500; }
+.wbar i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--three); transition: background 0.4s; } .wbar i.live { background: var(--ok); transition: none; }
+.wtabs { flex: none; display: flex; gap: 6px; padding: 7px calc(var(--pad) + var(--sr)) 7px calc(var(--pad) + var(--sl)); overflow-x: auto; scrollbar-width: none; background: var(--bg); border-bottom: 1px solid var(--line); } .wtabs::-webkit-scrollbar { display: none; }
+.wtabs button { flex: none; max-width: 170px; padding: 6px 12px; border-radius: 8px; background: var(--raised); color: var(--two); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .wtabs button[aria-pressed=true] { background: #3a3a41; color: var(--fg); font-weight: 600; }
+.wview { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y; scrollbar-width: none; } .wview::-webkit-scrollbar { display: none; }
+.wview img { display: block; width: 100%; height: auto; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.wview .note { color: var(--three); text-align: center; font-size: 15px; padding: 60px 30px; line-height: 1.45; }
+.chat .note { color: var(--three); text-align: center; font-size: 15px; padding: 60px 30px; line-height: 1.45; }
+
+.answers { flex: none; padding: 10px calc(12px + var(--sr)) 2px calc(12px + var(--sl)); border-top: 1px solid var(--line); } .answers .choices { margin: 0; }
+.keys { flex: none; display: flex; gap: 6px; padding: 8px calc(10px + var(--sr)) 4px calc(10px + var(--sl)); overflow-x: auto; scrollbar-width: none; border-top: 1px solid var(--line); } .keys::-webkit-scrollbar { display: none; }
+.keys button { flex: none; display: grid; place-items: center; min-width: 44px; height: 36px; padding: 0 11px; border-radius: 7px; background: var(--raised); font: 13px var(--mono); color: var(--two); }
+.keys button:active { background: var(--press); } .keys button[aria-pressed=true] { background: var(--fg); color: #111; }
+.compose { flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 8px calc(12px + var(--sr)) calc(10px + var(--sb)) calc(12px + var(--sl)); }
+textarea { width: 100%; resize: none; display: block; background: var(--group); border: 1px solid var(--line); border-radius: 20px; padding: 9px 15px; line-height: 1.3; outline: none; max-height: 130px; }
+textarea::placeholder, input::placeholder { color: var(--three); }
+.send { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--on-accent); } .send:active { opacity: 0.6; }
+.send.quiet { background: var(--raised); color: var(--two); } .send.stop { background: var(--raised); color: var(--bad); }
+.blank { display: none; flex: 1; place-items: center; color: var(--three); padding: 24px; text-align: center; }
+
+/* ---- sheets ---- */
+#scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); opacity: 0; visibility: hidden; transition: opacity 0.25s, visibility 0s 0.25s; z-index: 20; }
+#scrim.on { opacity: 1; visibility: visible; transition: opacity 0.25s, visibility 0s; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 21; max-height: calc(var(--h) - 28px - var(--st)); display: flex; flex-direction: column; background: var(--group); border-radius: 14px 14px 0 0; padding: 6px calc(16px + var(--sr)) calc(16px + var(--sb)) calc(16px + var(--sl)); transform: translateY(104%); visibility: hidden; transition: transform 0.34s var(--ease), visibility 0s 0.34s; }
+.sheet.on { transform: none; visibility: visible; transition: transform 0.34s var(--ease), visibility 0s; }
+.grab { flex: none; width: 36px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.22); margin: 0 auto 6px; }
+.sheet .bar { flex: none; display: flex; align-items: center; min-height: 44px; margin-bottom: 8px; } .sheet .bar h3 { flex: 1; min-width: 0; padding: 0 8px; font-size: 17px; font-weight: 600; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet .bar button { min-width: 64px; min-height: 44px; color: var(--accent); } .sheet .bar button.do { font-weight: 600; text-align: right; } .sheet .bar button:active { opacity: 0.5; }
+.sheet .cap { margin: 14px 4px 6px; color: var(--three); font-size: 13.5px; } .sheet .cap.pick { display: flex; gap: 12px; align-items: baseline; } .cap.pick span { flex: none; } .cap.pick b { flex: 1; min-width: 0; text-align: right; color: var(--fg); font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .sheet .foot { margin: 8px 4px 0; color: var(--three); font-size: 13.5px; line-height: 1.4; }
+.sheet textarea { border-radius: 12px; min-height: 96px; background: var(--raised); border: 0; padding: 12px 14px; max-height: 220px; }
+.sheet input[type=text] { width: 100%; min-height: 40px; background: var(--raised); border: 0; border-radius: 10px; padding: 0 12px; outline: none; margin-bottom: 8px; }
+.list { min-height: 0; overflow-y: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; border-radius: 12px; background: var(--raised); max-height: 220px; } .list::-webkit-scrollbar { display: none; }
+.list button, .line { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 46px; padding: 6px 14px; border-top: 1px solid var(--line); } .list > :first-child, .line:first-child { border-top: 0; }
+.list button:active { background: var(--press); } .list button span, .line span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list button svg { color: var(--accent); visibility: hidden; flex: none; } .list button[aria-pressed=true] svg { visibility: visible; }
+.list .none { padding: 14px; color: var(--three); }
+.box { border-radius: 12px; background: var(--raised); overflow: hidden; }
+.line.act { color: var(--accent); justify-content: center; } .line.act:active { background: var(--press); } .line.danger { color: var(--bad); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; padding: 2px; border-radius: 9px; background: var(--raised); }
+.seg button { min-height: 38px; border-radius: 7px; text-align: center; font-size: 15px; color: var(--two); } .seg button[aria-pressed=true] { background: #3a3a41; color: var(--fg); font-weight: 600; }
+.stepper { display: flex; align-items: center; gap: 2px; flex: none; } .stepper button { display: grid; place-items: center; width: 44px; height: 34px; border-radius: 8px; background: var(--press); font-size: 15px; } .stepper b { min-width: 30px; text-align: center; font-weight: 400; color: var(--two); font-variant-numeric: tabular-nums; }
+
+#pair { position: absolute; inset: 0; overflow-y: auto; padding: calc(72px + var(--st)) 28px 28px; max-width: 480px; margin: 0 auto; }
+#pair h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.022em; } #pair p { margin: 10px 0 22px; color: var(--two); line-height: 1.45; }
+#pair input { width: 100%; min-height: 48px; background: var(--group); border: 0; border-radius: 12px; padding: 0 14px; outline: none; }
+.cta { display: block; width: 100%; min-height: 50px; margin-top: 12px; border-radius: 12px; background: var(--accent); color: var(--on-accent); font-weight: 600; text-align: center; } .cta:active { opacity: 0.7; }
+
+#toast { position: absolute; left: 50%; top: calc(8px + var(--st)); transform: translate(-50%, -180%); max-width: calc(100% - 24px); background: #2c2c31; border-radius: 12px; padding: 11px 16px; font-size: 15px; z-index: 30; transition: transform 0.34s var(--ease); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4); }
+#toast.on { transform: translate(-50%, 0); } #toast.bad { color: #ffb4b2; } #toast.warn { color: #f3cf8c; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* a wide screen shows both, and has a keyboard of its own */
+@media (min-width: 900px) {
+  #home { right: auto; width: 380px; border-right: 1px solid var(--line); transition: none; }
+  #view { left: 380px; transform: none; visibility: visible; transition: none; }
+  body.viewing #home { transform: none; }
+  body:not(.viewing) #view > :not(.blank) { display: none; } body:not(.viewing) .blank { display: grid; }
+  #back { display: none; } .vhead { padding-left: 18px; }
+  .sheet { left: 50%; right: auto; width: 460px; margin-left: -230px; bottom: 8vh; border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); } .grab { visibility: hidden; }
+  .nav h1 { font-size: 26px; }
+}
+@media (hover: hover) and (pointer: fine) { .keys { display: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 2s !important; transition-duration: 0.01s !important; } }
+</style>
+</head>
+<body>
+
+<section id="pair" hidden>
+  <h1>Pair this device</h1>
+  <p>On the computer, open Maestro, type <b>&gt;</b>, choose Remote access, then Pair a device. Scan the code it shows, or paste its link here. A code works once, for ten minutes.</p>
+  <form id="pairform">
+    <input type="text" id="pairin" placeholder="Link or pairing code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Link or pairing code">
+    <button class="cta" type="submit">Pair</button>
+  </form>
+</section>
+
+<div id="app" hidden>
+  <main id="home">
+    <header class="nav">
+      <div class="grow"><h1>Sessions</h1><p class="host" id="host"></p></div>
+      <button class="tool" type="button" id="prefs" aria-label="This device"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18.5" cy="12" r="1.6" fill="currentColor"/></svg></button>
+      <button class="tool" type="button" id="add" aria-label="New session"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    </header>
+    <p class="offline" id="offline" hidden></p>
+    <div class="scroll"><div id="rows"></div></div>
+  </main>
+
+  <section id="view" aria-label="Session">
+    <div class="vhead">
+      <button class="tool" type="button" id="back" aria-label="Back to the sessions"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <span class="tt"><span class="t" id="vtitle"></span><span class="n" id="vsub"></span></span>
+      <span class="modes" id="modes" role="group" aria-label="How to show this session"><button type="button" data-mode="chat">Chat</button><button type="button" data-mode="term">Terminal</button><button type="button" data-mode="web" hidden>Browser</button></span>
+      <button class="tool" type="button" id="more" aria-label="More for this session"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18.5" cy="12" r="1.6" fill="currentColor"/></svg></button>
+    </div>
+    <div class="body">
+      <div class="chat" id="chat" hidden><div class="msgs" id="msgs"></div></div>
+      <div class="web" id="web" hidden>
+        <div class="wbar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M3 12h18M12 3c2.6 2.4 4 5.6 4 9s-1.4 6.6-4 9c-2.6-2.4-4-5.6-4-9s1.4-6.6 4-9z" stroke="currentColor" stroke-width="1.8"/></svg><span id="wurl"></span><i id="wlive" aria-hidden="true"></i></div>
+        <div class="wtabs" id="wtabs" role="group" aria-label="The pages this browser has open" hidden></div>
+        <div class="wview" id="wview"><img id="wimg" alt="The page this session's browser is showing" draggable="false" hidden><div class="note" id="wnote"></div></div>
+      </div>
+      <div class="starting off" id="starting" aria-live="polite"><i class="spin"></i><b></b><span></span></div>
+      <div class="tbody" id="tbody" hidden><div class="term" id="term"></div></div>
+    </div>
+    <div class="answers" id="answers" hidden></div>
+    <div class="keys" id="keys" role="group" aria-label="Keys" hidden>
+      <button type="button" data-k="esc">esc</button><button type="button" data-k="tab">tab</button><button type="button" data-k="stab">⇧tab</button>
+      <button type="button" data-k="ctrl" aria-pressed="false">ctrl</button><button type="button" data-k="c">^C</button>
+      <button type="button" data-k="up">↑</button><button type="button" data-k="down">↓</button><button type="button" data-k="left">←</button><button type="button" data-k="right">→</button>
+      <button type="button" data-k="pgup">pg↑</button><button type="button" data-k="pgdn">pg↓</button>
+    </div>
+    <form class="compose" id="compose">
+      <textarea id="line" rows="1" placeholder="Message" enterkeyhint="enter" autocomplete="off" aria-label="Message to this session"></textarea>
+      <button class="send quiet" type="submit" id="send" aria-label="Send"></button>
+    </form>
+    <div class="blank">Choose a session.</div>
+  </section>
+
+  <div id="scrim"></div>
+
+  <form class="sheet" id="sheet-new" aria-label="New session">
+    <i class="grab"></i>
+    <div class="bar"><button type="button" data-close>Cancel</button><h3>New session</h3><button class="do" type="submit">Start</button></div>
+    <div class="seg" role="group" aria-label="What to start"><button type="button" data-kind="claude">Claude Code</button><button type="button" data-kind="ubuntu">Shell</button></div>
+    <div id="npromptbox"><p class="cap">First message</p><textarea id="nprompt" placeholder="Optional" aria-label="First message"></textarea></div>
+    <p class="cap pick"><span>Project</span><b id="nchosen"></b></p>
+    <input type="text" id="nfind" placeholder="Find a project" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Search projects" hidden>
+    <div class="list" id="nprojects"></div>
+  </form>
+
+  <form class="sheet" id="sheet-reply" aria-label="Reply">
+    <i class="grab"></i>
+    <div class="bar"><button type="button" data-close>Cancel</button><h3 id="rtitle"></h3><button class="do" type="submit">Send</button></div>
+    <textarea id="rtext" aria-label="Your reply"></textarea>
+  </form>
+
+  <div class="sheet" id="sheet-more" aria-label="This session">
+    <i class="grab"></i>
+    <div class="bar"><button type="button" aria-hidden="true" tabindex="-1"></button><h3 id="mtitle"></h3><button class="do" type="button" data-close>Done</button></div>
+    <div class="box">
+      <div class="line" id="msizeline"><span>Terminal text size</span><span class="stepper"><button type="button" data-size="-1" aria-label="Smaller">−</button><b id="msize"></b><button type="button" data-size="1" aria-label="Larger">+</button></span></div>
+      <button class="line act danger" type="button" id="mend">End session</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="sheet-prefs" aria-label="This device">
+    <i class="grab"></i>
+    <div class="bar"><button type="button" aria-hidden="true" tabindex="-1"></button><h3>This device</h3><button class="do" type="button" data-close>Done</button></div>
+    <div class="box"><button class="line act" type="button" id="pushbtn"></button></div>
+    <p class="foot" id="pushnote"></p>
+    <div class="box" style="margin-top:18px"><button class="line act danger" type="button" id="unpair">Unpair this device</button></div>
+  </div>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script>
+'use strict';
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} } };
+const IC = {
+  send: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 16V4.5M5 9l5-5 5 5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  enter: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M15.5 4.5v5a2 2 0 01-2 2H5M8 8l-3.5 3.5L8 15" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  stop: '<svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="5.5" y="5.5" width="9" height="9" rx="2" fill="currentColor"/></svg>',
+  check: '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M3.5 9.5l3.5 3.5 7.5-8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+const THEME = { background: 'rgba(0,0,0,0)', foreground: '#e6e6e9', cursor: '#6cb8f6', cursorAccent: '#0b0b0d', selectionBackground: 'rgba(108,184,246,0.3)', black: '#1b2028', brightBlack: '#5a6270', red: '#f0605f', brightRed: '#ff8f8a', green: '#3ecf72', brightGreen: '#74e39a', yellow: '#f0b429', brightYellow: '#ffd166', blue: '#5b9cf0', brightBlue: '#8fbcff', magenta: '#c4a7ff', brightMagenta: '#dcc8ff', cyan: '#5cc8ff', brightCyan: '#9be0ff', white: '#c0c6cf', brightWhite: '#ffffff' };
+const wide = () => matchMedia('(min-width: 900px)').matches;
+const hasKeys = () => matchMedia('(hover: hover) and (pointer: fine)').matches;
+const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (_) {} };
+
+let toastTimer = 0;
+function say(text, kind, tap) { const m = $('#toast'); m.textContent = text; m.className = `on ${kind || ''}`; m.onclick = () => { m.className = ''; if (tap) tap(); }; clearTimeout(toastTimer); toastTimer = setTimeout(() => { m.className = kind || ''; }, tap ? 6000 : 3000); }
+
+// ---- the link to the app ----
+const S = { ws: null, up: false, token: store.get('maestro-token') || '', pair: '', tries: 0, sessions: [], projects: [], seen: {}, loaded: false, kind: 'claude', proj: store.get('maestro-proj'), n: 0, cur: null, replyTo: null, font: Number(store.get('maestro-font')) || 0, vapid: '', wanted: new URLSearchParams(location.search).get('s') || '' };
+// a pairing link carries a code after the #: it works once and earns this device a token of its own. Take it out of the address bar.
+const takeCode = () => { if (location.hash.length <= 8) return false; S.pair = location.hash.slice(1); history.replaceState(null, '', location.pathname); return true; };
+takeCode(); if (S.wanted) history.replaceState(null, '', location.pathname);
+// the link was opened in a page that is already here: pair with it now
+addEventListener('hashchange', () => { if (!takeCode()) return; S.tries = 0; S.up = false; if (S.ws) { const old = S.ws; S.ws = null; old.close(); } connect(); });
+const deviceName = () => { const u = navigator.userAgent; return /iPhone/.test(u) ? 'iPhone' : /iPad/.test(u) ? 'iPad' : /Android/.test(u) ? (/Mobile/.test(u) ? 'Android phone' : 'Android tablet') : /Mac/.test(u) ? 'Mac' : /Windows/.test(u) ? 'Windows PC' : /Linux|X11/.test(u) ? 'Linux computer' : 'A device'; };
+
+function send(o) { if (S.up) S.ws.send(JSON.stringify(o)); return S.up; }
+function link(state) { const o = $('#offline'); o.hidden = state === 'on'; o.textContent = state === 'off' ? 'Not connected. Trying again…' : 'Connecting…'; }
+function showPair(why) { $('#app').hidden = true; $('#pair').hidden = false; document.body.classList.remove('viewing'); if (why) say(why, 'bad'); }
+function connect() {
+  if (!S.token && !S.pair) return showPair();
+  $('#pair').hidden = true; $('#app').hidden = false;
+  const ws = S.ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws.onopen = () => ws.send(JSON.stringify(S.pair ? { op: 'hello', pair: S.pair, name: deviceName() } : { op: 'hello', token: S.token }));
+  ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch (_) { return; } heard(m); };
+  ws.onclose = () => { if (S.ws !== ws) return; S.up = false; if (!S.token && !S.pair) return; link('off'); setTimeout(connect, Math.min(5000, 600 * ++S.tries)); };
+}
+function heard(m) {
+  if (m.op === 'hello') { if (m.token) { S.token = m.token; store.set('maestro-token', m.token); } S.pair = ''; S.vapid = m.vapid || ''; S.up = true; S.tries = 0; link('on'); $('#host').textContent = m.host || ''; send({ op: 'list' }); if (S.cur) resume(); return; }
+  if (m.op === 'denied') { const paired = !!S.token && !S.pair; S.token = ''; S.pair = ''; store.set('maestro-token', null); S.ws.close(); return showPair(paired ? 'This device is no longer paired with the computer.' : 'That code has been used or has run out. Make a new one on the computer.'); }
+  if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.loaded = true; drawRows(); webOffer(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
+  if (m.op === 'chat') return heardChat(m);
+  if (m.op === 'browser' || m.op === 'frame') return heardWeb(m);
+  if (m.op === 'out') { const c = S.cur; if (c && c.id === m.id && c.term) c.term.write(m.data, c.starting ? () => { if (S.cur === c && c.term && shows(c.term)) { starting(null); toChat(c); } } : undefined); return; }
+  if (m.op === 'opened') { if (S.cur && S.cur.id === m.id) { S.cur.name = m.name; drawRows(); toChat(S.cur); } send({ op: 'list' }); return; }
+  if (m.op === 'exit') { if (S.cur && S.cur.id === m.id) { say('That session has ended'); closeView(); } send({ op: 'list' }); return; }
+  if (m.op === 'err') { say(m.text || 'That did not work', 'bad'); if (S.cur && S.cur.id === m.id) closeView(); }
+}
+// ask again while someone is looking: the list, and the conversation that is open
+setInterval(() => { if (!S.up || document.visibilityState !== 'visible') return; send({ op: 'list' }); const c = S.cur; if (c && c.mode === 'chat' && c.name) send({ op: 'chat', name: c.name, after: c.last || '' }); }, 2000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (S.up) send({ op: 'list' }); else if ((S.token || S.pair) && S.ws && S.ws.readyState > 1) { S.tries = 0; connect(); } } });
+
+// ---- what a session's screen says: what it is doing, the answers it is waiting for, its last lines ----
+function read(screen, kind) {
+  const plain = (t) => t.replace(/[─-╿▀-▟]/g, ' ').replace(/\s+/g, ' ').trim();
+  // lines that are only the program's own furniture say nothing about the work
+  const body = String(screen || '').split('\n').filter((t) => plain(t).length > 1 && /[A-Za-z0-9]{2}/.test(plain(t)) && !/^[^A-Za-z0-9]*(for shortcuts|shift\+tab|esc to|auto mode|bypass|accept edits|plan mode)/i.test(plain(t)) && !/shift\+tab to cycle|\/effort|for shortcuts|\/clear to save/i.test(t) && !(kind === 'claude' && (/Claude Code v\d|\bwith \w+ effort ·|^\W*Try "/.test(t) || /^(~|\/)[^\s]*$/.test(plain(t)))) && !/^[^A-Za-z0-9]*[A-Z][a-z]+ed for \d/.test(plain(t)));
+  let now = '';
+  for (let i = body.length - 1; i >= 0 && i >= body.length - 25; i--) { const t = plain(body[i]); if (/esc to interrupt|tokens\)|\(\d+s\b|…\s*\(/i.test(t)) { now = t.replace(/^[^A-Za-z0-9]+/, '').replace(/\s*\((?:[^()]*esc to interrupt[^()]*|[^()]*tokens[^()]*)\)\s*$/i, ''); break; } }
+  const busy = !!now;
+  if (!now && kind !== 'claude') { const last = body[body.length - 1]; now = last ? plain(last) : ''; }
+  // a question with numbered answers ("1. Yes  2. Yes, and don't ask again  3. No"), as Claude Code asks before it does something
+  let opts = []; let at = body.length;
+  for (let i = body.length - 1; i >= Math.max(0, body.length - 12); i--) { const m = plain(body[i]).match(/^[❯>›\s]*(\d)[.)]\s+(.{1,70})$/); if (m) { opts.unshift([m[1], m[2].trim()]); at = i; } else if (opts.length) break; }
+  if (opts.length < 2 || opts.some(([n], i) => Number(n) !== i + 1)) { opts = []; at = body.length; }
+  const clip = (ls) => ls.map((t) => t.replace(/\s+$/, '').slice(0, 120));
+  // `ask` is what stands above the answers: what is being asked
+  // the preview of a Claude session is what it last said, not the line you are about to type on
+  const said = kind === 'claude' ? body.filter((t) => !/^\s*[❯>›]/.test(t)) : body;
+  return { now, busy, opts, tail: clip(said.slice(-2)), ask: clip(body.slice(Math.max(0, at - 3), at)) };
+}
+function stateOf(s) {
+  const seen = S.seen[s.name] || (S.seen[s.name] = { screen: s.screen, at: 0, st: '' });
+  if (seen.screen !== s.screen) { seen.screen = s.screen; seen.at = Date.now(); }
+  const pk = read(s.screen, s.kind);
+  const working = pk.busy || Date.now() - seen.at < 6000;
+  const opts = s.kind === 'claude' && !pk.busy ? pk.opts : [];
+  return { pk, opts, seen, st: opts.length ? 'needs' : working ? 'working' : 'idle' };
+}
+const HEAD = { needs: 'Waiting for you', working: 'Working', idle: 'Idle' };
+const choices = (opts) => opts.length ? `<div class="choices">${opts.map(([n, t]) => `<button type="button" data-opt="${esc(n)}"><i>${esc(n)}</i><span>${esc(t)}</span></button>`).join('')}</div>` : '';
+
+// The sessions, grouped by what they need from you. Rows are kept and only their contents change, so nothing jumps while you read.
+function drawRows() {
+  const el = $('#rows'); if (!S.loaded) return;
+  const RANK = { needs: 0, working: 1, idle: 2 };
+  const all = S.sessions.map((s, i) => ({ s, i, ...stateOf(s) })).sort((a, b) => RANK[a.st] - RANK[b.st] || a.i - b.i);
+  // a session that has just started waiting: say so, wherever you are
+  for (const r of all) { if (r.st === 'needs' && r.seen.st && r.seen.st !== 'needs' && !(S.cur && S.cur.name === r.s.name)) { buzz(60); say(`${r.s.label || 'A session'} is waiting for you`, 'warn', () => openView(r.s)); } r.seen.st = r.st; }
+  const waiting = all.filter((r) => r.st === 'needs').length; document.title = waiting ? `(${waiting}) Maestro` : 'Maestro';
+  const have = new Map([...el.children].map((c) => [c.dataset.key, c])); const want = [];
+  if (!all.length) want.push(['empty', () => { const d = document.createElement('div'); d.className = 'empty'; d.innerHTML = '<b>No sessions</b>Nothing is running on this computer. Start a session with the + above.'; return d; }, null]);
+  let last = '';
+  for (const r of all) {
+    if (r.st !== last) { last = r.st; const n = all.filter((x) => x.st === r.st).length; want.push([`h-${r.st}`, () => { const d = document.createElement('div'); d.innerHTML = '<span></span><i></i>'; return d; }, (d) => { d.className = `sect ${r.st}`; d.firstChild.textContent = HEAD[r.st]; d.lastChild.textContent = n; }]); }
+    want.push([`s-${r.s.name}`, () => { const a = document.createElement('article'); a.dataset.name = r.s.name; a.innerHTML = '<button class="open" type="button"><span class="t"></span><span class="meta"></span><span class="now"><i class="spin"></i><span></span></span><pre class="tail"></pre></button><div class="ask"></div><div class="acts"><button type="button" data-act="reply"></button><button type="button" data-act="esc">Cancel</button></div>'; return a; }, (a) => {
+      const { s, st, pk, opts } = r;
+      a.className = `row ${st}${S.cur && S.cur.name === s.name ? ' on' : ''}`;
+      $('.t', a).textContent = unnamed(s) ? s.project || s.name : s.label; $('.meta', a).textContent = `${unnamed(s) ? '' : `${s.project} · `}${s.kind === 'claude' ? 'Claude Code' : 'Shell'}${s.browser ? ' · Browser' : ''}`;
+      const now = st === 'working' ? (pk.busy ? pk.now : 'Working') : ''; const ne = $('.now', a); ne.hidden = !now; ne.lastChild.textContent = now;
+      const tail = st === 'working' ? '' : (st === 'needs' ? pk.ask : pk.tail).join('\n'); const te = $('.tail', a); if (te.textContent !== tail) te.textContent = tail; te.hidden = !tail;
+      const sig = opts.map((o) => o.join(':')).join('|'); const ae = $('.ask', a); if (ae.dataset.sig !== sig) { ae.dataset.sig = sig; ae.innerHTML = choices(opts); }
+      $('[data-act=reply]', a).textContent = s.kind === 'claude' ? 'Reply' : 'Run a command'; $('[data-act=reply]', a).hidden = st === 'needs'; $('[data-act=esc]', a).hidden = st !== 'needs';
+    }]);
+  }
+  want.forEach(([key, make, fill], k) => { let c = have.get(key); have.delete(key); if (!c) { c = make(); c.dataset.key = key; } if (el.children[k] !== c) el.insertBefore(c, el.children[k] || null); if (fill) fill(c); });
+  for (const c of have.values()) c.remove();
+  if (S.cur) headState();
+}
+
+// ---- sheets ----
+function sheet(id) { document.querySelectorAll('.sheet.on').forEach((s) => s.classList.remove('on')); $('#scrim').classList.toggle('on', !!id); if (id) $(id).classList.add('on'); else if (document.activeElement && document.activeElement.blur && !(wide() && document.activeElement.closest('#term'))) document.activeElement.blur(); armEnd(false); }
+function drawNew() {
+  const every = S.projects.filter((p) => p.keeps);
+  if (!every.some((p) => String(p.i) === String(S.proj))) { const first = every.find((p) => p.favorite) || every[0]; S.proj = first ? String(first.i) : null; }
+  // the chosen one first, then the starred, then the rest by name; many projects get a line to find one by
+  const chosen = (p) => String(p.i) === String(S.proj) ? 1 : 0; const find = $('#nfind'); find.hidden = every.length <= 8; const q = find.hidden ? '' : find.value.trim().toLowerCase();
+  // (while one is being looked for, the names that begin with what was typed come first, and the chosen one keeps its place)
+  const begins = (p) => q && p.name.toLowerCase().startsWith(q) ? 1 : 0;
+  const ps = every.filter((p) => !q || p.name.toLowerCase().includes(q)).sort((a, b) => (q ? begins(b) - begins(a) : chosen(b) - chosen(a)) || (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || a.name.localeCompare(b.name));
+  const mine = every.find((p) => chosen(p)); $('#nchosen').textContent = mine ? mine.name : '';
+  $('#nprojects').innerHTML = ps.map((p) => `<button type="button" data-proj="${p.i}" aria-pressed="${!!chosen(p)}"><span>${esc(p.name)}</span>${IC.check}</button>`).join('') || `<div class="none">${q ? 'No project of that name.' : 'No project on this computer keeps its sessions running.'}</div>`;
+  const order = ps.map((p) => p.i).join(','); if ($('#nprojects').dataset.order !== order) { $('#nprojects').dataset.order = order; $('#nprojects').scrollTop = 0; }
+  document.querySelectorAll('.seg [data-kind]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.kind === S.kind)));
+  $('#npromptbox').hidden = S.kind !== 'claude';
+}
+function openReply(s) { S.replyTo = s; $('#rtitle').textContent = s.label || s.name; $('#rtext').value = ''; $('#rtext').placeholder = s.kind === 'claude' ? 'Reply' : 'Command'; sheet('#sheet-reply'); setTimeout(() => $('#rtext').focus(), 80); }
+
+// ---- one session: as a conversation (Claude Code), or as its terminal ----
+const fontSize = () => Math.max(9, Math.min(20, (wide() ? 13 : 12) + S.font));
+const listed = (name) => S.sessions.find((x) => x.name === name);
+const KIND = { claude: 'Claude Code', ubuntu: 'Shell' };
+const unnamed = (s) => !s.label || /^(claude|shell|session)$/i.test(s.label.trim());
+function openView(who, fresh) {
+  if (!S.up) return say('Not connected to the computer yet', 'bad');
+  closeView(true); sheet(null);
+  document.body.classList.add('viewing');
+  if (unnamed(who) && who.project) who = { ...who, label: who.project, project: KIND[who.kind] || 'Shell' };
+  S.cur = { id: '', name: who.name || '', kind: who.kind, label: who.label, project: who.project, mode: '', term: null, fit: null, ctrl: false, items: [], last: '', chatOk: null, fresh: fresh || null, toChat: !!fresh && who.kind === 'claude' && store.get('maestro-mode') !== 'term', asked: !!(fresh && fresh.prompt) };
+  $('#vtitle').textContent = who.label; $('#vsub').textContent = who.project; $('#vsub').className = 'n'; $('#line').value = ''; $('#msgs').innerHTML = ''; $('#answers').hidden = true; $('#answers').dataset.sig = '';
+  webOffer();
+  // a session being started is watched in its terminal; one that is running opens as a conversation
+  setMode(who.kind === 'claude' && !fresh && store.get('maestro-mode') !== 'term' ? 'chat' : 'term');
+  drawRows();
+}
+function setMode(mode) {
+  const c = S.cur; if (!c || c.mode === mode) return;
+  if (c.mode === 'term') dropTerm(c);
+  if (c.mode === 'web') dropWeb();
+  c.mode = mode; document.querySelectorAll('#modes [data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
+  $('#chat').hidden = mode !== 'chat'; $('#web').hidden = mode !== 'web'; $('#tbody').hidden = mode !== 'term'; $('#keys').hidden = mode !== 'term'; $('#msizeline').hidden = mode !== 'term';
+  $('#line').placeholder = c.kind !== 'claude' ? 'Command' : 'Message'; grow();
+  if (mode === 'chat') { c.items = []; c.last = ''; c.chatOk = null; $('#msgs').innerHTML = '<div class="note">Loading the conversation…</div>'; send({ op: 'chat', name: c.name, after: '' }); }
+  else if (mode === 'web') startWeb(c);
+  else startTerm(c);
+  headState();
+}
+// A session being started takes a few seconds to draw anything: until then, say what is being started and where.
+function starting(c, f) {
+  const el = $('#starting'); clearTimeout(starting.t); if (S.cur) S.cur.starting = !!c;
+  if (!c) return el.classList.add('off');
+  $('b', el).textContent = `Starting ${f.kind === 'claude' ? 'Claude Code' : 'a shell'}`; $('span', el).textContent = `${f.place ? `in ${f.place}` : ''}${f.prompt ? `${f.place ? ', ' : ''}with your first message` : ''}`;
+  el.classList.remove('off'); starting.t = setTimeout(() => starting(null), 20000);
+}
+// once it is up, a Claude Code session started from here is shown as its conversation (unless the terminal is what you use)
+function toChat(c) { if (!c.toChat || !c.name || c.starting || S.cur !== c || c.mode !== 'term') return; c.toChat = false; setMode('chat'); }
+const shows = (term) => { const b = term.buffer.active; for (let i = 0; i < b.length; i++) { const l = b.getLine(i); if (l && l.translateToString(true).trim()) return true; } return false; };
+function startTerm(c) {
+  if (typeof Terminal === 'undefined') return say('The terminal part of the page did not load', 'bad');
+  const term = c.term = new Terminal({ fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono'), fontSize: fontSize(), lineHeight: 1.2, cursorBlink: true, allowTransparency: true, scrollback: 2000, macOptionIsMeta: true, theme: THEME });
+  c.fit = new FitAddon.FitAddon(); term.loadAddon(c.fit); term.open($('#term')); try { c.fit.fit(); } catch (_) {}
+  c.id = `r${++S.n}-${Date.now().toString(36)}`; c.cols = term.cols; c.rows = term.rows;
+  term.onData((d) => { if (c.ctrl && d.length === 1) { d = String.fromCharCode(d.toUpperCase().charCodeAt(0) & 31); setCtrl(false); } send({ op: 'in', id: c.id, data: d }); });
+  c.watch = new ResizeObserver(() => refit()); c.watch.observe($('#term'));
+  const f = c.fresh; c.fresh = null; starting(f ? c : null, f);
+  send(f ? { op: 'new', id: c.id, kind: f.kind, proj: f.proj, prompt: f.prompt, cols: term.cols, rows: term.rows } : { op: 'open', id: c.id, name: c.name, cols: term.cols, rows: term.rows });
+  if (wide()) term.focus();
+}
+function dropTerm(c, later) {
+  if (!c.term) return; starting(null); send({ op: 'close', id: c.id }); c.watch.disconnect(); setCtrl(false);
+  const t = c.term; const el = t.element; c.term = null; c.id = '';
+  const gone = () => { t.dispose(); if (el && el.parentNode) el.parentNode.removeChild(el); }; if (later) setTimeout(gone, 320); else gone();
+}
+function refit() { const c = S.cur; if (!c || !c.term) return; try { c.fit.fit(); } catch (_) {} if (c.term.cols !== c.cols || c.term.rows !== c.rows) { c.cols = c.term.cols; c.rows = c.term.rows; send({ op: 'size', id: c.id, cols: c.cols, rows: c.rows }); } }
+// the connection came back: pick up where the screen is
+function resume() { const c = S.cur; if (!c.name) return closeView(); if (c.mode === 'chat') return void send({ op: 'chat', name: c.name, after: c.last || '' }); if (c.mode === 'web') return startWeb(c); c.id = `r${++S.n}-${Date.now().toString(36)}`; c.term.reset(); send({ op: 'open', id: c.id, name: c.name, cols: c.term.cols, rows: c.term.rows }); }
+function closeView(quiet) {
+  const c = S.cur; if (!c) return; S.cur = null;
+  dropTerm(c, !quiet && !wide()); if (c.mode === 'web') dropWeb(); $('#answers').hidden = true;
+  document.body.classList.remove('viewing'); $('#line').blur();
+  if (!quiet) { drawRows(); send({ op: 'list' }); }
+}
+function setCtrl(on) { if (S.cur) S.cur.ctrl = on; $('#keys [data-k=ctrl]').setAttribute('aria-pressed', String(on)); }
+const KEYS = { esc: '\x1b', tab: '\t', stab: '\x1b[Z', c: '\x03', up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D', enter: '\r', pgup: '\x1b[5~', pgdn: '\x1b[6~' };
+
+// What the open session is doing right now: from its terminal if that is showing, else from the list.
+function nowOf(c) {
+  if (c.mode === 'term' && c.term) { const b = c.term.buffer.active; const lines = []; for (let i = b.length - 1; i >= 0 && lines.length < 40; i--) { const ln = b.getLine(i); if (!ln) continue; const t = ln.translateToString(true); if (t.trim()) lines.unshift(t); } const pk = read(lines.join('\n'), c.kind); return { pk, opts: c.kind === 'claude' && !pk.busy ? pk.opts : [], working: pk.busy }; }
+  const s = listed(c.name); if (!s) return { pk: { now: '', busy: false }, opts: [], working: false };
+  const r = stateOf(s); return { pk: r.pk, opts: r.opts, working: r.st === 'working' };
+}
+function headState() {
+  const c = S.cur; if (!c) return; const { pk, opts, working } = nowOf(c);
+  const sub = $('#vsub'); sub.textContent = opts.length ? 'Waiting for you' : working && pk.busy ? pk.now : c.project; sub.className = `n${opts.length ? ' asks' : ''}`;
+  const el = $('#answers'); const sig = opts.map((o) => o.join(':')).join('|');
+  if (el.dataset.sig !== sig) { el.dataset.sig = sig; el.innerHTML = choices(opts); el.hidden = !opts.length; if (opts.length) buzz(40); }
+  c.working = working && !opts.length; busyLine(); grow();
+}
+setInterval(() => { if (S.cur && S.cur.mode === 'term') headState(); }, 700);
+
+// ---- the conversation: what was said, what was done, as Claude Code keeps it ----
+function md(src) {
+  const inline = (t) => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  const out = []; let para = []; let list = null;
+  const flush = () => { if (para.length) { out.push(`<p>${inline(para.join('\n')).replace(/\n/g, '<br>')}</p>`); para = []; } if (list) { out.push(`<${list.tag}>${list.items.map((i) => `<li>${inline(i)}</li>`).join('')}</${list.tag}>`); list = null; } };
+  const lines = String(src).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]; let m;
+    if (/^\s*```/.test(l)) { flush(); const code = []; i++; while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]); out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); continue; }
+    if (/^\s*\|.*\|\s*$/.test(l)) { flush(); const rows = []; while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(lines[i++]); i--; out.push(`<pre><code>${esc(rows.join('\n'))}</code></pre>`); continue; }
+    if ((m = l.match(/^#{1,6}\s+(.*)$/))) { flush(); out.push(`<h4>${inline(m[1])}</h4>`); continue; }
+    if ((m = l.match(/^\s*(?:[-*•]|(\d+)[.)])\s+(.*)$/))) { if (para.length) flush(); const tag = m[1] ? 'ol' : 'ul'; if (!list || list.tag !== tag) { flush(); list = { tag, items: [] }; } list.items.push(m[2]); continue; }
+    if (!l.trim()) { flush(); continue; }
+    if (list && /^\s+\S/.test(l)) { list.items[list.items.length - 1] += ' ' + l.trim(); continue; }
+    if (list) flush(); para.push(l);
+  }
+  flush(); return out.join('');
+}
+function heardChat(m) {
+  const c = S.cur; if (!c || c.mode !== 'chat' || c.name !== m.name) return;
+  const box = $('#chat'); const el = $('#msgs');
+  if (!m.found) { if (c.chatOk === true) return;   // it was found a moment ago: what is shown stays
+    if (c.chatOk !== false) { c.chatOk = false; el.innerHTML = '<div class="note">This session’s conversation was not found on the computer. It is shown as its terminal instead.</div>'; setTimeout(() => { if (S.cur === c && c.mode === 'chat') setMode('term'); }, 1200); } return; }
+  const stuck = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  if (m.reset || c.chatOk !== true) { c.items = []; el.innerHTML = ''; }
+  c.chatOk = true;
+  for (const it of m.items || []) {
+    if (c.items.some((x) => x.id === it.id)) continue; c.items.push(it); c.last = it.id;
+    const prev = el.lastElementChild && !el.lastElementChild.classList.contains('busy') ? el.lastElementChild : (el.lastElementChild ? el.lastElementChild.previousElementSibling : null);
+    if (it.role === 'tool') { let d = prev && prev.classList.contains('tools') ? prev : null; if (!d) { d = document.createElement('details'); d.className = 'm tools'; d.innerHTML = '<summary></summary>'; el.insertBefore(d, $('.busy', el)); } const line = document.createElement('div'); it.text = it.text.replace(/^mcp__(?:plugin_)?(.+?)__(?:browser_)?(\w+)/, (_, a, b) => `${a.replace(/_/g, ' ')}: ${b.replace(/_/g, ' ')}`); line.textContent = it.text; d.appendChild(line); const n = d.children.length - 1; d.firstChild.textContent = n === 1 ? it.text : `${n} steps · ${it.text}`; continue; }
+    const d = document.createElement('div'); d.className = `m ${it.role}`; if (it.role === 'assistant') d.innerHTML = md(it.text); else d.textContent = it.text; el.insertBefore(d, $('.busy', el));
+  }
+  if (!c.items.length && !$('.note', el)) el.innerHTML = `<div class="note">${c.asked ? 'Claude Code is starting. Your message shows here in a moment.' : 'Nothing has been said in this session yet. Write a message below to begin.'}</div>`;
+  busyLine(); if (stuck || m.reset) box.scrollTop = box.scrollHeight;
+}
+// the last line of a conversation while the session works: what it is doing
+function busyLine() {
+  const c = S.cur; if (!c || c.mode !== 'chat' || !c.chatOk) return; const el = $('#msgs'); let b = $('.busy', el);
+  if (!c.working) { if (b) b.remove(); return; }
+  const s = listed(c.name); const pk = s ? read(s.screen, s.kind) : { now: '' };
+  if (!b) { const box = $('#chat'); const stuck = box.scrollHeight - box.scrollTop - box.clientHeight < 80; b = document.createElement('div'); b.className = 'm busy'; b.innerHTML = '<i class="spin"></i><span></span>'; el.appendChild(b); if (stuck) box.scrollTop = box.scrollHeight; }
+  b.lastChild.textContent = pk.now || 'Working';
+}
+
+// ---- the browser of a session: what its page looks like now, each time it changes ----
+// Browser is offered for a session whose programs drive one (and stays while it is being looked at)
+function webOffer() { const c = S.cur; if (!c) return; const s = listed(c.name); const has = !!(s && s.browser) || c.mode === 'web'; $('#modes [data-mode=web]').hidden = !has; $('#modes').hidden = c.kind !== 'claude' && !has; $('#modes [data-mode=chat]').hidden = c.kind !== 'claude'; }
+function startWeb(c) {
+  c.web = { state: '', pages: [], page: '', n: 0, z: 1 }; c.wpick = ''; $('#wimg').hidden = true; $('#wimg').removeAttribute('src'); $('#wimg').style.width = ''; drawWeb();
+  const v = $('#wview'); send({ op: 'browser', name: c.name, page: '', width: Math.round(Math.min(1600, Math.max(360, v.clientWidth) * Math.min(3, window.devicePixelRatio || 1))) });
+}
+function dropWeb() { send({ op: 'browser', name: '' }); $('#wimg').hidden = true; $('#wimg').removeAttribute('src'); }
+function heardWeb(m) {
+  const c = S.cur; if (!c || c.mode !== 'web' || c.name !== m.name || !c.web) return; const w = c.web;
+  if (m.op === 'browser') { const moved = w.page && w.page !== m.page; w.state = m.state; w.pages = m.pages || []; w.page = m.page || ''; if (m.state !== 'on' || moved) { $('#wimg').hidden = true; if (moved) zoomWeb(1); } return drawWeb(); }
+  // a picture of the page: shown, and only then is the next one asked for
+  const img = $('#wimg'); const seen = () => { img.onload = img.onerror = null; send({ op: 'seen', n: m.n }); };
+  img.onload = img.onerror = seen; img.src = `data:image/jpeg;base64,${m.data}`; if (img.hidden) { img.hidden = false; drawWeb(); }
+  const dot = $('#wlive'); dot.classList.add('live'); clearTimeout(w.t); w.t = setTimeout(() => dot.classList.remove('live'), 500);
+}
+function drawWeb() {
+  const c = S.cur; if (!c || !c.web) return; const w = c.web; const cur = w.pages.find((p) => p.id === w.page);
+  let host = '', rest = ''; try { const u = new URL(cur ? cur.url : ''); host = u.host || u.protocol; rest = u.host ? (u.pathname === '/' ? '' : u.pathname) + u.search : u.pathname.slice(0, 60); } catch (_) {}
+  $('#wurl').innerHTML = cur ? `<b>${esc(host)}</b>${esc(rest)}` : 'No page';
+  const tabs = $('#wtabs'); tabs.hidden = w.pages.length < 2; const sig = w.pages.map((p) => `${p.id}:${p.title}`).join('|') + w.page;
+  if (tabs.dataset.sig !== sig) { tabs.dataset.sig = sig; tabs.innerHTML = w.pages.map((p) => `<button type="button" data-wpage="${esc(p.id)}" aria-pressed="${p.id === w.page}">${esc(p.title || p.url || 'Page')}</button>`).join(''); }
+  const note = $('#wnote'); const shown = !$('#wimg').hidden; note.hidden = shown;
+  note.textContent = shown ? '' : w.state === 'none' ? 'This session has no browser page open right now. It shows here as soon as it opens one.' : w.state === 'on' ? 'Waiting for the page…' : 'Looking for this session’s browser…';
+}
+// larger and smaller: two fingers, or a double tap; the place under the fingers stays under them
+function zoomWeb(z, x, y) {
+  const c = S.cur; if (!c || !c.web) return; const v = $('#wview'); const img = $('#wimg'); const old = c.web.z; z = Math.max(1, Math.min(6, z)); if (z === old) return;
+  const r = v.getBoundingClientRect(); const px = x == null ? r.width / 2 : x - r.left; const py = y == null ? 0 : y - r.top;
+  const fx = (v.scrollLeft + px) / old; const fy = (v.scrollTop + py) / old;
+  c.web.z = z; img.style.width = z === 1 ? '' : `${z * 100}%`; v.scrollLeft = fx * z - px; v.scrollTop = fy * z - py;
+}
+{
+  const v = $('#wview'); let pinch = null; let tapped = 0;
+  const span = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+  v.addEventListener('touchstart', (e) => { if (e.touches.length === 2 && S.cur && S.cur.web) pinch = { d: span(e), z: S.cur.web.z }; }, { passive: true });
+  v.addEventListener('touchmove', (e) => { if (!pinch || e.touches.length !== 2) return; e.preventDefault(); zoomWeb(pinch.z * span(e) / pinch.d, (e.touches[0].clientX + e.touches[1].clientX) / 2, (e.touches[0].clientY + e.touches[1].clientY) / 2); }, { passive: false });
+  v.addEventListener('touchend', (e) => {
+    if (pinch) { if (e.touches.length < 2) pinch = null; tapped = 0; return; }
+    if (e.touches.length || !S.cur || !S.cur.web) return; const t = e.changedTouches[0]; const now = Date.now();
+    if (now - tapped < 300) { tapped = 0; e.preventDefault(); zoomWeb(S.cur.web.z > 1 ? 1 : 2.5, t.clientX, t.clientY); } else tapped = now;
+  });
+  v.addEventListener('scroll', () => { tapped = 0; }, { passive: true });
+  // Safari's own page zoom would enlarge the whole app
+  for (const g of ['gesturestart', 'gesturechange']) v.addEventListener(g, (e) => e.preventDefault());
+}
+
+let endTimer = 0;
+function armEnd(on) { const b = $('#mend'); clearTimeout(endTimer); b.dataset.sure = on ? '1' : ''; b.textContent = on ? 'Tap again to end it' : 'End session'; if (on) endTimer = setTimeout(() => armEnd(false), 4000); }
+// the round button: send what is typed; with nothing typed, stop a working conversation, or press Enter in a terminal
+function grow() { const t = $('#line'); t.style.height = 'auto'; t.style.height = `${Math.min(130, t.scrollHeight + 2)}px`; const c = S.cur; const has = !!t.value.trim(); const what = has ? 'send' : c && c.mode !== 'term' ? (c.working ? 'stop' : 'send') : 'enter'; const b = $('#send'); b.className = `send${what === 'send' && has ? '' : what === 'stop' ? ' stop' : ' quiet'}`; b.innerHTML = IC[what]; b.dataset.what = has ? 'send' : what; b.setAttribute('aria-label', what === 'stop' ? 'Stop' : what === 'enter' ? 'Press Enter in the session' : 'Send'); }
+// several lines go into a terminal as one paste, so that a line break does not send half a message
+const typed = (text) => /\n/.test(text) ? `\x1b[200~${text}\x1b[201~` : text;
+
+// a finger moved over the terminal scrolls it: tmux has the mouse, so it is told the wheel turned
+let touchY = null;
+$('#tbody').addEventListener('touchstart', (e) => { touchY = e.touches.length === 1 ? e.touches[0].clientY : null; }, { passive: true });
+$('#tbody').addEventListener('touchmove', (e) => {
+  const c = S.cur; if (touchY == null || !c || !c.term || e.touches.length !== 1) return;
+  const dy = e.touches[0].clientY - touchY; const steps = Math.trunc(dy / 16); if (!steps) return;
+  touchY += steps * 16; send({ op: 'in', id: c.id, data: `\x1b[<${steps > 0 ? 64 : 65};1;1M`.repeat(Math.min(6, Math.abs(steps))) });
+}, { passive: true });
+// a sheet is dragged down by its top to put it away
+let drag = null;
+document.addEventListener('touchstart', (e) => { const s = e.target.closest && e.target.closest('.sheet.on'); drag = s && e.target.closest('.grab, .bar h3') ? { s, y: e.touches[0].clientY, d: 0 } : null; }, { passive: true });
+document.addEventListener('touchmove', (e) => { if (!drag) return; drag.d = Math.max(0, e.touches[0].clientY - drag.y); drag.s.style.transition = 'none'; drag.s.style.transform = `translateY(${drag.d}px)`; }, { passive: true });
+document.addEventListener('touchend', () => { if (!drag) return; const { s, d } = drag; drag = null; s.style.transition = ''; s.style.transform = ''; if (d > 90) sheet(null); });
+
+// ---- notifications: this device is told when a session starts waiting, even while the page is closed ----
+const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushable = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && isSecureContext;
+const b64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (ch) => ch.charCodeAt(0));
+async function pushState() { if (!pushable()) return 'no'; try { const reg = await navigator.serviceWorker.getRegistration(); const sub = reg && await reg.pushManager.getSubscription(); return sub && Notification.permission === 'granted' ? 'on' : 'off'; } catch (_) { return 'off'; } }
+async function drawPrefs() {
+  const st = await pushState(); const b = $('#pushbtn'); const note = $('#pushnote'); b.dataset.st = st;
+  b.textContent = st === 'on' ? 'Turn notifications off' : 'Turn notifications on'; b.classList.toggle('danger', st === 'on'); b.disabled = st === 'no' || !S.vapid;
+  b.style.opacity = b.disabled ? 0.4 : 1;
+  note.textContent = st === 'on' ? 'This device is told when a session starts waiting for you or finishes.'
+    : !isSecureContext ? 'Notifications need the secure address. On the computer, open Remote access and turn on “Secure address”, then pair this device again with the new code.'
+    : /iPhone|iPad/.test(navigator.userAgent) && !standalone() ? 'On an iPhone or iPad, add this page to the Home Screen first (Share, then Add to Home Screen) and open it from there.'
+    : st === 'no' || !S.vapid ? 'This browser cannot receive notifications from a page.'
+    : 'Be told when a session starts waiting for you or finishes, even while this page is closed.';
+}
+async function pushToggle() {
+  const st = $('#pushbtn').dataset.st;
+  try {
+    const reg = await navigator.serviceWorker.register('sw.js'); await navigator.serviceWorker.ready;
+    if (st === 'on') { const sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); send({ op: 'push', off: true }); say('Notifications are off'); return drawPrefs(); }
+    if (await Notification.requestPermission() !== 'granted') { say('Notifications are not allowed for this page in the device’s settings', 'bad'); return drawPrefs(); }
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u(S.vapid) });
+    send({ op: 'push', sub: sub.toJSON() }); say('Notifications are on');
+  } catch (e) { say(`Notifications could not be turned on: ${e && e.message ? e.message : e}`, 'bad'); }
+  drawPrefs();
+}
+// a notification was tapped: open the session it was about
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (e) => { const n = e.data && e.data.open; const s = n && listed(n); if (s) openView(s); else if (n) S.wanted = n; });
+
+// ---- what is tapped ----
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  if (t.closest('#scrim') || t.closest('[data-close]')) return sheet(null);
+  const row = t.closest('.row'); const s = row && listed(row.dataset.name);
+  if (s && t.closest('[data-opt]')) { buzz(15); return void send({ op: 'say', name: s.name, text: t.closest('[data-opt]').dataset.opt, enter: false }); }
+  if (s && t.closest('[data-act=reply]')) return openReply(s);
+  if (s && t.closest('[data-act=esc]')) return void send({ op: 'say', name: s.name, text: '\x1b', enter: false });
+  if (s && t.closest('.open')) return openView(s);
+  if (t.closest('#answers [data-opt]')) { const c = S.cur; if (!c) return; buzz(15); const o = t.closest('[data-opt]').dataset.opt; if (c.mode === 'term') send({ op: 'in', id: c.id, data: o }); else send({ op: 'say', name: c.name, text: o, enter: false }); return; }
+  if (t.closest('[data-mode]')) { const m = t.closest('[data-mode]').dataset.mode; if (m !== 'web') store.set('maestro-mode', m); if (S.cur) S.cur.toChat = false; return setMode(m); }
+  if (t.closest('[data-wpage]')) { const c = S.cur; if (c && c.mode === 'web') { c.wpick = t.closest('[data-wpage]').dataset.wpage; send({ op: 'browser', name: c.name, page: c.wpick }); drawWeb(); } return; }
+  if (t.closest('#add')) { $('#nfind').value = ''; drawNew(); return sheet('#sheet-new'); }
+  if (t.closest('#prefs')) { drawPrefs(); return sheet('#sheet-prefs'); }
+  if (t.closest('#pushbtn')) return pushToggle();
+  if (t.closest('#unpair')) { const b = $('#unpair'); if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Tap again to unpair'; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Unpair this device'; }, 4000); return; } S.token = ''; store.set('maestro-token', null); sheet(null); if (S.ws) S.ws.close(); return showPair(); }
+  if (t.closest('[data-proj]')) { S.proj = t.closest('[data-proj]').dataset.proj; const f = $('#nfind'); f.value = ''; f.blur(); return drawNew(); }
+  if (t.closest('[data-kind]')) { S.kind = t.closest('[data-kind]').dataset.kind; return drawNew(); }
+  if (t.closest('#back')) return closeView();
+  if (t.closest('#more')) { const c = S.cur; if (!c) return; $('#mtitle').textContent = c.label; $('#msize').textContent = fontSize(); return sheet('#sheet-more'); }
+  if (t.closest('[data-size]')) { S.font = Math.max(-3, Math.min(7, S.font + Number(t.closest('[data-size]').dataset.size))); store.set('maestro-font', String(S.font)); $('#msize').textContent = fontSize(); if (S.cur && S.cur.term) { S.cur.term.options.fontSize = fontSize(); refit(); } return; }
+  if (t.closest('#mend')) { const c = S.cur; if (!c || !c.name) return sheet(null); if (!$('#mend').dataset.sure) return armEnd(true); send({ op: 'end', name: c.name }); sheet(null); return closeView(); }
+});
+// the keys above the keyboard must not take it away from where you are typing
+$('#keys').addEventListener('pointerdown', (e) => { const b = e.target.closest('[data-k]'); if (!b) return; e.preventDefault(); const c = S.cur; if (!c || !c.term) return; buzz(8); if (b.dataset.k === 'ctrl') return setCtrl(!c.ctrl); send({ op: 'in', id: c.id, data: KEYS[b.dataset.k] }); });
+$('#send').addEventListener('pointerdown', (e) => e.preventDefault());
+$('#line').addEventListener('input', grow);
+$('#nfind').addEventListener('input', drawNew);
+// a keyboard of its own: Enter sends, Shift+Enter is a new line. On a phone Enter is a new line and the button sends.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('.sheet.on')) return sheet(null);
+  if (e.key === 'Enter' && !e.shiftKey && hasKeys() && e.target.matches && e.target.matches('#line, #rtext')) { e.preventDefault(); e.target.closest('form').requestSubmit(); }
+});
+document.addEventListener('submit', (e) => {
+  e.preventDefault(); const f = e.target;
+  if (f.id === 'pairform') { const v = $('#pairin').value.trim(); const tok = v.includes('#') ? v.slice(v.indexOf('#') + 1) : v; if (tok.length < 16) return say('That is not a pairing code', 'bad'); S.pair = tok; S.tries = 0; return connect(); }
+  if (f.id === 'sheet-new') { if (S.proj == null) return say('No project here keeps its sessions running', 'bad'); store.set('maestro-proj', S.proj); const p = S.projects.find((x) => String(x.i) === String(S.proj)); const text = S.kind === 'claude' ? $('#nprompt').value.trim() : ''; openView({ name: '', kind: S.kind, label: text ? text.replace(/\s+/g, ' ').slice(0, 60) : S.kind === 'claude' ? 'Claude' : 'Shell', project: p ? p.name : '' }, { kind: S.kind, proj: Number(S.proj), prompt: text, place: p ? p.name : '' }); $('#nprompt').value = ''; return; }
+  if (f.id === 'compose') {
+    const c = S.cur; const inp = $('#line'); if (!c) return; const text = inp.value; const what = $('#send').dataset.what; inp.value = ''; buzz(10);
+    if (c.mode !== 'term') { if (text.trim()) { send({ op: 'say', name: c.name, text: text.trim() }); if (c.mode === 'web') say('Sent'); const box = $('#chat'); setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50); } else if (what === 'stop') send({ op: 'say', name: c.name, text: '\x1b', enter: false }); }
+    else if (text) { send({ op: 'in', id: c.id, data: typed(text) }); setTimeout(() => send({ op: 'in', id: c.id, data: '\r' }), 110); } else send({ op: 'in', id: c.id, data: '\r' });
+    return grow();
+  }
+  if (f.id === 'sheet-reply') { const s = S.replyTo; const text = $('#rtext').value.trim(); if (!s || !text) return; if (send({ op: 'say', name: s.name, text })) { buzz(10); sheet(null); say('Sent'); } else say('Not connected to the computer yet', 'bad'); }
+});
+
+// the on-screen keyboard covers the bottom of the page: keep the page as tall as what is left
+const vv = window.visualViewport;
+const sized = () => { document.documentElement.style.setProperty('--h', `${Math.round(vv ? vv.height : innerHeight)}px`); window.scrollTo(0, 0); };
+if (vv) { vv.addEventListener('resize', sized); vv.addEventListener('scroll', sized); } addEventListener('resize', sized); sized();
+
+grow(); connect();
+</script>
+</body>
+</html>
