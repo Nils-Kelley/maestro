@@ -86,7 +86,7 @@ body.viewing #home { transform: translateX(-25%); }
 .vhead .n { color: var(--three); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .vhead .n.asks { color: var(--warn); }
 .modes { flex: none; display: flex; padding: 2px; border-radius: 9px; background: var(--raised); margin: 0 2px; }
 /* the ways to show a session do not fit beside its name on a phone: they get a line of their own */
-@media (max-width: 520px) { .vhead { flex-wrap: wrap; } .vhead .modes { order: 5; flex: 1 0 calc(100% - 16px); margin: 6px 8px 2px; } .vhead .modes button { flex: 1; text-align: center; padding: 8px 0; font-size: 14.5px; } }
+@media (max-width: 520px) { .vhead .modes.many button { font-size: 13.5px; letter-spacing: -0.01em; } .vhead { flex-wrap: wrap; } .vhead .modes { order: 5; flex: 1 0 calc(100% - 16px); margin: 6px 8px 2px; } .vhead .modes button { flex: 1; text-align: center; padding: 8px 0; font-size: 14.5px; } }
 .modes button { padding: 5px 11px; border-radius: 7px; font-size: 13.5px; color: var(--two); } .modes button[aria-pressed=true] { background: #3a3a41; color: var(--fg); font-weight: 600; }
 .body { flex: 1; min-height: 0; min-width: 0; position: relative; }
 .tbody { position: absolute; inset: 0; padding: 6px 2px 2px 8px; overflow: hidden; touch-action: none; background: #0b0b0d; }
@@ -186,7 +186,9 @@ body.gitting #home { transform: translateX(-25%); }
 .diff .l { display: flex; } .diff .l i { flex: none; width: 5.5ch; padding-right: 1.2ch; text-align: right; font-style: normal; color: var(--three); opacity: 0.7; -webkit-user-select: none; user-select: none; } .diff .l span { flex: 1; min-width: 0; padding-right: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff .l.a { background: rgba(79, 191, 122, 0.14); } .diff .l.a span { color: #c3f1d3; } .diff .l.d { background: rgba(239, 100, 97, 0.14); } .diff .l.d span { color: #ffd0ce; }
 .diff.nowrap { overflow-x: auto; overscroll-behavior-x: contain; } .diff.nowrap .in { display: inline-block; min-width: 100%; } .diff.nowrap .l span { white-space: pre; overflow-wrap: normal; } .diff.nowrap .h { overflow: visible; }
-#gwrap[aria-pressed=false] { color: var(--three); }
+#gwrap[aria-pressed=false], #sgwrap[aria-pressed=false] { color: var(--three); }
+.sgit { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); } .sgbar { flex: none; display: flex; align-items: center; min-height: 48px; padding: 2px calc(6px + var(--sr)) 2px calc(6px + var(--sl)); border-bottom: 1px solid var(--line); }
+.sgbar .tt { flex: 1; min-width: 0; display: grid; padding: 0 12px; } .sgbar #sgback:not([hidden]) + .tt { padding-left: 2px; } .sgbar .t { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .sgbar .n { color: var(--three); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* ---- the pairing code, read through the camera ---- */
 .scanwrap { position: relative; margin-top: 12px; } .scanwrap .cta { margin-top: 0; } #pair #pairshot { position: absolute; left: 0; top: 0; width: 100%; height: 100%; min-height: 0; padding: 0; opacity: 0; cursor: pointer; font-size: 0; } .scanwrap.live #pairshot { display: none; }
 #pair input.digits { min-height: 64px; text-align: center; font: 600 30px var(--mono); letter-spacing: 0.18em; } #pair input.digits::placeholder { color: var(--three); opacity: 0.45; font-weight: 400; }
@@ -251,7 +253,7 @@ body.gitting #home { transform: translateX(-25%); }
     <div class="vhead">
       <button class="tool" type="button" id="back" aria-label="Back to the sessions"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <span class="tt"><span class="t" id="vtitle"></span><span class="n" id="vsub"></span></span>
-      <span class="modes" id="modes" role="group" aria-label="How to show this session"><button type="button" data-mode="chat">Chat</button><button type="button" data-mode="detail">Detail</button><button type="button" data-mode="term">Terminal</button><button type="button" data-mode="web" hidden>Browser</button></span>
+      <span class="modes" id="modes" role="group" aria-label="How to show this session"><button type="button" data-mode="chat">Chat</button><button type="button" data-mode="detail">Detail</button><button type="button" data-mode="git">Git</button><button type="button" data-mode="shell">Terminal</button><button type="button" data-mode="term">Terminal</button><button type="button" data-mode="web" hidden>Browser</button></span>
       <button class="tool" type="button" id="more" aria-label="More for this session"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18.5" cy="12" r="1.6" fill="currentColor"/></svg></button>
     </div>
     <div class="body">
@@ -262,6 +264,10 @@ body.gitting #home { transform: translateX(-25%); }
         <div class="wview" id="wview"><img id="wimg" alt="The page this session's browser is showing" draggable="false" hidden><div class="note" id="wnote"></div></div>
       </div>
       <div class="starting off" id="starting" aria-live="polite"><i class="spin"></i><b></b><span></span></div>
+      <div class="sgit" id="sgit" hidden>
+        <div class="sgbar"><button class="tool" type="button" id="sgback" aria-label="Back to the changed files" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><span class="tt"><span class="t" id="sgtitle"></span><span class="n" id="sgsub"></span></span><button class="tool" type="button" id="sgwrap" aria-label="Wrap long lines" aria-pressed="true" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h13a3 3 0 010 6h-4m0 0l2.5-2.5M13 18l2.5 2.5M4 18h5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+        <div class="scroll" id="sgbody"></div>
+      </div>
       <div class="tbody" id="tbody" hidden><div class="term" id="term"></div></div>
     </div>
     <div class="answers" id="answers" hidden></div>
@@ -301,6 +307,7 @@ body.gitting #home { transform: translateX(-25%); }
     <div class="bar"><button type="button" aria-hidden="true" tabindex="-1"></button><h3 id="mtitle"></h3><button class="do" type="button" data-close>Done</button></div>
     <div class="box">
       <div class="line" id="msizeline"><span>Terminal text size</span><span class="stepper"><button type="button" data-size="-1" aria-label="Smaller">−</button><b id="msize"></b><button type="button" data-size="1" aria-label="Larger">+</button></span></div>
+      <button class="line act" type="button" id="mraw">Claude Code’s own screen</button>
       <button class="line act danger" type="button" id="mend">End session</button>
     </div>
   </div>
@@ -363,12 +370,12 @@ function heard(m) {
   if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.loaded = true; drawRows(); webOffer(); if (G.tab === 'projects') drawRepos(); if (G.cur && gitTop().k === 'repo') drawGit(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
   if (m.op === 'chat') return heardChat(m);
   if (m.op === 'browser' || m.op === 'frame') return heardWeb(m);
-  if (m.op === 'repos') { G.repos = m.items || []; G.more = m.more || 0; G.loaded = G.repos.length > 0 || !G.more; return drawRepos(); }
+  if (m.op === 'repos') { G.repos = m.items || []; G.more = m.more || 0; G.loaded = G.repos.length > 0 || !G.more; if (S.cur && S.cur.mode === 'git' && !G.cur && !G.more) startSGit(S.cur); return drawRepos(); }
   if (m.op === 'repo' || m.op === 'commit' || m.op === 'diff' || m.op === 'giterr') return heardGit(m);
   if (m.op === 'out') { const c = S.cur; if (c && c.id === m.id && c.term) c.term.write(m.data, c.starting ? () => { if (S.cur === c && c.term && shows(c.term)) { starting(null); toChat(c); } } : undefined); return; }
-  if (m.op === 'opened') { if (S.cur && S.cur.id === m.id) { S.cur.name = m.name; drawRows(); toChat(S.cur); } send({ op: 'list' }); return; }
-  if (m.op === 'exit') { if (S.cur && S.cur.id === m.id) { say('That session has ended'); closeView(); } send({ op: 'list' }); return; }
-  if (m.op === 'err') { say(m.text || 'That did not work', 'bad'); if (S.cur && S.cur.id === m.id) closeView(); }
+  if (m.op === 'opened') { const c = S.cur; if (c && c.id === m.id) { if (c.mode === 'shell') { c.shell = m.name; shellKeep(c.name, m.name); } else { c.name = m.name; drawRows(); toChat(c); } } send({ op: 'list' }); return; }
+  if (m.op === 'exit') { const c = S.cur; if (c && c.id === m.id) { if (c.mode === 'shell') { shellKeep(c.name, null); say('That shell has ended'); setMode(talk(c)); } else { say('That session has ended'); closeView(); } } send({ op: 'list' }); return; }
+  if (m.op === 'err') { say(m.text || 'That did not work', 'bad'); if (S.cur && S.cur.id === m.id) { if (S.cur.mode === 'shell') setMode(talk(S.cur)); else closeView(); } }
 }
 // ask again while someone is looking: the list, and the conversation that is open
 setInterval(() => { if (!S.up || document.visibilityState !== 'visible') return; send({ op: 'list' }); const c = S.cur; if (c && chatty(c) && c.name) send({ op: 'chat', name: c.name, after: c.last || '', detail: c.mode === 'detail' }); }, 2000);
@@ -455,6 +462,11 @@ const fontSize = () => Math.max(9, Math.min(20, (wide() ? 13 : 12) + S.font));
 const listed = (name) => S.sessions.find((x) => x.name === name);
 // a session shown as what was said: in short (Chat) or with every step and what came back (Detail)
 const chatty = (c) => c.mode === 'chat' || c.mode === 'detail';
+// a terminal is on the screen: the session's own (term), or a shell beside a Claude Code session, in its project (shell)
+const termish = (c) => c.mode === 'term' || c.mode === 'shell';
+const shells = () => { try { return JSON.parse(store.get('maestro-shells') || '{}') || {}; } catch (_) { return {}; } };
+const shellKeep = (session, shell) => { const m = shells(); if (shell) m[session] = shell; else delete m[session]; for (const k of Object.keys(m)) if (S.loaded && !listed(k)) delete m[k]; store.set('maestro-shells', JSON.stringify(m)); };
+const talk = (c) => store.get('maestro-mode') === 'detail' ? 'detail' : 'chat';
 const KIND = { claude: 'Claude Code', ubuntu: 'Shell' };
 const unnamed = (s) => !s.label || /^(claude|shell|session)$/i.test(s.label.trim());
 function openView(who, fresh) {
@@ -471,13 +483,15 @@ function openView(who, fresh) {
 }
 function setMode(mode) {
   const c = S.cur; if (!c || c.mode === mode) return;
-  if (c.mode === 'term') dropTerm(c);
+  if (termish(c)) dropTerm(c);
   if (c.mode === 'web') dropWeb();
+  if (c.mode === 'git') dropSGit();
   c.mode = mode; document.querySelectorAll('#modes [data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
-  $('#chat').hidden = mode !== 'chat' && mode !== 'detail'; $('#msgs').classList.toggle('detail', mode === 'detail'); $('#web').hidden = mode !== 'web'; $('#tbody').hidden = mode !== 'term'; $('#keys').hidden = mode !== 'term'; $('#msizeline').hidden = mode !== 'term';
-  $('#line').placeholder = c.kind !== 'claude' ? 'Command' : 'Message'; grow();
+  $('#chat').hidden = mode !== 'chat' && mode !== 'detail'; $('#msgs').classList.toggle('detail', mode === 'detail'); $('#web').hidden = mode !== 'web'; $('#sgit').hidden = mode !== 'git'; $('#tbody').hidden = !termish(c); $('#keys').hidden = !termish(c); $('#msizeline').hidden = !termish(c);
+  $('#line').placeholder = c.kind !== 'claude' || mode === 'shell' ? 'Command' : 'Message'; grow();
   if (mode === 'chat' || mode === 'detail') { c.items = []; c.last = ''; c.chatOk = null; $('#msgs').innerHTML = '<div class="note">Loading the conversation…</div>'; send({ op: 'chat', name: c.name, after: '', detail: mode === 'detail' }); }
   else if (mode === 'web') startWeb(c);
+  else if (mode === 'git') startSGit(c);
   else startTerm(c);
   headState();
 }
@@ -492,12 +506,19 @@ function starting(c, f) {
 function toChat(c) { if (!c.toChat || !c.name || c.starting || S.cur !== c || c.mode !== 'term') return; c.toChat = false; setMode(store.get('maestro-mode') === 'detail' ? 'detail' : 'chat'); }
 const shows = (term) => { const b = term.buffer.active; for (let i = 0; i < b.length; i++) { const l = b.getLine(i); if (l && l.translateToString(true).trim()) return true; } return false; };
 function startTerm(c) {
+  // a shell beside a Claude Code session: the one started for it before, if it still runs, else a new one in the same project
+  let shell = null;
+  if (c.mode === 'shell') {
+    const s = listed(c.name); const had = shells()[c.name]; shell = had && listed(had) ? { name: had } : { proj: s ? s.proj : null, place: s ? s.project : '' };
+    if (!shell.name && shell.proj == null) { say('This session’s folder is not one of the projects on the computer, so a shell cannot be started in it', 'bad'); return void setTimeout(() => { if (S.cur === c && c.mode === 'shell') setMode(talk(c)); }, 0); }
+  }
   if (typeof Terminal === 'undefined') return say('The terminal part of the page did not load', 'bad');
   const term = c.term = new Terminal({ fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono'), fontSize: fontSize(), lineHeight: 1.2, cursorBlink: true, allowTransparency: true, scrollback: 2000, macOptionIsMeta: true, theme: THEME });
   c.fit = new FitAddon.FitAddon(); term.loadAddon(c.fit); term.open($('#term')); try { c.fit.fit(); } catch (_) {}
   c.id = `r${++S.n}-${Date.now().toString(36)}`; c.cols = term.cols; c.rows = term.rows;
   term.onData((d) => { if (c.ctrl && d.length === 1) { d = String.fromCharCode(d.toUpperCase().charCodeAt(0) & 31); setCtrl(false); } send({ op: 'in', id: c.id, data: d }); });
   c.watch = new ResizeObserver(() => refit()); c.watch.observe($('#term'));
+  if (shell) { c.shell = shell.name || ''; if (!shell.name) starting(c, { kind: 'ubuntu', place: shell.place }); send(shell.name ? { op: 'open', id: c.id, name: shell.name, cols: term.cols, rows: term.rows } : { op: 'new', id: c.id, kind: 'ubuntu', proj: shell.proj, prompt: '', label: `Shell · ${c.label}`.slice(0, 60), cols: term.cols, rows: term.rows }); if (wide()) term.focus(); return; }
   const f = c.fresh; c.fresh = null; starting(f ? c : null, f);
   send(f ? { op: 'new', id: c.id, kind: f.kind, proj: f.proj, prompt: f.prompt, cols: term.cols, rows: term.rows } : { op: 'open', id: c.id, name: c.name, cols: term.cols, rows: term.rows });
   if (wide()) term.focus();
@@ -509,10 +530,10 @@ function dropTerm(c, later) {
 }
 function refit() { const c = S.cur; if (!c || !c.term) return; try { c.fit.fit(); } catch (_) {} if (c.term.cols !== c.cols || c.term.rows !== c.rows) { c.cols = c.term.cols; c.rows = c.term.rows; send({ op: 'size', id: c.id, cols: c.cols, rows: c.rows }); } }
 // the connection came back: pick up where the screen is
-function resume() { const c = S.cur; if (!c.name) return closeView(); if (chatty(c)) return void send({ op: 'chat', name: c.name, after: c.last || '', detail: c.mode === 'detail' }); if (c.mode === 'web') return startWeb(c); c.id = `r${++S.n}-${Date.now().toString(36)}`; c.term.reset(); send({ op: 'open', id: c.id, name: c.name, cols: c.term.cols, rows: c.term.rows }); }
+function resume() { const c = S.cur; if (!c.name) return closeView(); if (chatty(c)) return void send({ op: 'chat', name: c.name, after: c.last || '', detail: c.mode === 'detail' }); if (c.mode === 'web') return startWeb(c); if (c.mode === 'git') return gitAsk(); if (c.mode === 'shell') { dropTerm(c); return startTerm(c); } c.id = `r${++S.n}-${Date.now().toString(36)}`; c.term.reset(); send({ op: 'open', id: c.id, name: c.name, cols: c.term.cols, rows: c.term.rows }); }
 function closeView(quiet) {
   const c = S.cur; if (!c) return; S.cur = null;
-  dropTerm(c, !quiet && !wide()); if (c.mode === 'web') dropWeb(); $('#answers').hidden = true;
+  dropTerm(c, !quiet && !wide()); if (c.mode === 'web') dropWeb(); if (c.mode === 'git') dropSGit(); $('#answers').hidden = true;
   document.body.classList.remove('viewing'); $('#line').blur();
   if (!quiet) { drawRows(); send({ op: 'list' }); }
 }
@@ -589,7 +610,7 @@ function busyLine() {
 
 // ---- the browser of a session: what its page looks like now, each time it changes ----
 // Browser is offered for a session whose programs drive one (and stays while it is being looked at)
-function webOffer() { const c = S.cur; if (!c) return; const s = listed(c.name); const has = !!(s && s.browser) || c.mode === 'web'; $('#modes [data-mode=web]').hidden = !has; $('#modes').hidden = c.kind !== 'claude' && !has; $('#modes [data-mode=chat]').hidden = c.kind !== 'claude'; $('#modes [data-mode=detail]').hidden = c.kind !== 'claude'; }
+function webOffer() { const c = S.cur; if (!c) return; const s = listed(c.name); const has = !!(s && s.browser) || c.mode === 'web'; $('#modes [data-mode=web]').hidden = !has; $('#modes').hidden = false; $('#modes').classList.toggle('many', c.kind === 'claude'); for (const m of ['chat', 'detail', 'shell']) $(`#modes [data-mode=${m}]`).hidden = c.kind !== 'claude'; $('#modes [data-mode=term]').hidden = c.kind === 'claude'; }
 function startWeb(c) {
   c.web = { state: '', pages: [], page: '', n: 0, z: 1 }; c.wpick = ''; $('#wimg').hidden = true; $('#wimg').removeAttribute('src'); $('#wimg').style.width = ''; drawWeb();
   const v = $('#wview'); send({ op: 'browser', name: c.name, page: '', width: Math.round(Math.min(1600, Math.max(360, v.clientWidth) * Math.min(3, window.devicePixelRatio || 1))) });
@@ -637,6 +658,8 @@ function zoomWeb(z, x, y) {
 // ---- the projects: every repo with what has changed in it, its commits and their diffs. Looked at, not acted on. ----
 const G = { tab: 'sessions', repos: [], loaded: false, cur: null, stack: [], wrap: store.get('maestro-wrap') !== '0' };
 const gitTop = () => G.stack[G.stack.length - 1] || {};
+// where the repo screens are drawn: a screen of their own (from Projects), or inside the session that works there
+const gitUI = () => G.inline ? { body: $('#sgbody'), title: $('#sgtitle'), sub: $('#sgsub'), wrap: $('#sgwrap') } : { body: $('#gbody'), title: $('#gtitle'), sub: $('#gsub'), wrap: $('#gwrap') };
 const sessionsIn = (folder) => S.sessions.filter((x) => x.project === folder).map((x) => ({ s: x, ...stateOf(x) }));
 function homeTab(tab) {
   G.tab = tab; document.querySelectorAll('#htabs [data-home]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.home === tab)));
@@ -653,10 +676,10 @@ function drawRepos() {
   const html = (live.length ? `<div class="sect"><span>Changes and sessions</span><i>${live.length}</i></div>${live.map(row).join('')}` : '') + (quiet.length ? `<div class="sect"><span>Nothing changed</span><i>${quiet.length}</i></div>${quiet.map(row).join('')}` : '') || '<div class="gnote">No project here is a git repo.</div>'; const tail = G.more ? `<div class="gnote" style="padding:18px 30px">Looking at ${G.more} more…</div>` : '';
   if (el.dataset.sig !== html + tail) { el.dataset.sig = html + tail; el.innerHTML = html + tail; }
 }
-function openRepo(r) { G.cur = r; G.stack = [{ k: 'repo' }]; document.body.classList.add('gitting'); drawGit(true); $('#gbody').scrollTop = 0; gitAsk(); }
+function openRepo(r) { if (S.cur && S.cur.mode === 'git') setMode(S.cur.kind === 'claude' ? talk(S.cur) : 'term'); G.inline = false; G.cur = r; G.stack = [{ k: 'repo' }]; document.body.classList.add('gitting'); drawGit(true); gitUI().body.scrollTop = 0; gitAsk(); }
 function closeGit() { G.cur = null; G.stack = []; document.body.classList.remove('gitting'); if (G.tab === 'projects') send({ op: 'repos' }); }
-function gitPush(f) { gitTop().at = $('#gbody').scrollTop; G.stack.push(f); drawGit(true); $('#gbody').scrollTop = 0; gitAsk(); }
-function gitBack() { if (G.stack.length <= 1) return closeGit(); G.stack.pop(); drawGit(true); $('#gbody').scrollTop = gitTop().at || 0; gitAsk(); }
+function gitPush(f) { gitTop().at = gitUI().body.scrollTop; G.stack.push(f); drawGit(true); gitUI().body.scrollTop = 0; gitAsk(); }
+function gitBack() { if (G.stack.length <= 1) return G.inline ? undefined : closeGit(); G.stack.pop(); drawGit(true); gitUI().body.scrollTop = gitTop().at || 0; gitAsk(); }
 function gitAsk() { const r = G.cur; const f = gitTop(); if (!r || !f.k || (f.k === 'commit' && f.data)) return; send({ op: f.k, proj: r.proj, repo: r.repo, sha: f.sha || '', kind: f.kind || '', path: f.path || '' }); }
 function heardGit(m) {
   const r = G.cur; const f = gitTop(); if (!r || m.proj !== r.proj || m.repo !== r.repo) return;
@@ -683,28 +706,40 @@ function diffHtml(text) {
   return out.join('');
 }
 function drawGit(fresh) {
-  const r = G.cur; const f = gitTop(); if (!r || !f.k) return; const el = $('#gbody'); const keep = el.scrollTop; const d = f.data;
-  $('#gwrap').hidden = f.k !== 'diff'; $('#gwrap').setAttribute('aria-pressed', String(G.wrap));
+  const r = G.cur; const f = gitTop(); if (!r || !f.k) return; const el = gitUI().body; const keep = el.scrollTop; const d = f.data;
+  gitUI().wrap.hidden = f.k !== 'diff'; gitUI().wrap.setAttribute('aria-pressed', String(G.wrap));
+  if (G.inline) $('#sgback').hidden = G.stack.length <= 1;
   const wait = f.err ? `<div class="gnote">${esc(f.err)}</div>` : '<div class="gnote">Reading…</div>'; let html = '';
   if (f.k === 'repo') {
-    const s = d && d.status; $('#gtitle').textContent = r.repo === r.project ? r.project : `${r.project} / ${r.repo}`;
-    $('#gsub').textContent = s ? [s.branch, s.ahead ? `${s.ahead} to push` : '', s.behind ? `${s.behind} behind` : '', !s.upstream ? 'not on a remote' : ''].filter(Boolean).join(' · ') : r.branch;
+    const s = d && d.status; gitUI().title.textContent = r.repo === r.project ? r.project : `${r.project} / ${r.repo}`;
+    gitUI().sub.textContent = s ? [s.branch, s.ahead ? `${s.ahead} to push` : '', s.behind ? `${s.behind} behind` : '', !s.upstream ? 'not on a remote' : ''].filter(Boolean).join(' · ') : r.branch;
     const ss = sessionsIn(r.folder);
-    if (ss.length) html += `<div class="sect"><span>Sessions here</span><i>${ss.length}</i></div>${ss.map((x) => `<button class="gline" type="button" data-gsess="${esc(x.s.name)}"><i class="dot ${x.st}"></i><span class="p"><b>${esc(unnamed(x.s) ? KIND[x.s.kind] || 'Shell' : x.s.label)}</b><span>${esc(x.st === 'needs' ? 'Waiting for you' : x.st === 'working' ? (x.pk.busy ? x.pk.now : 'Working') : 'Idle')}</span></span></button>`).join('')}`;
+    if (ss.length && !G.inline) html += `<div class="sect"><span>Sessions here</span><i>${ss.length}</i></div>${ss.map((x) => `<button class="gline" type="button" data-gsess="${esc(x.s.name)}"><i class="dot ${x.st}"></i><span class="p"><b>${esc(unnamed(x.s) ? KIND[x.s.kind] || 'Shell' : x.s.label)}</b><span>${esc(x.st === 'needs' ? 'Waiting for you' : x.st === 'working' ? (x.pk.busy ? x.pk.now : 'Working') : 'Idle')}</span></span></button>`).join('')}`;
     if (!d) html += wait; else {
       const add = s.files.reduce((n, x) => n + (Number(x.add) || 0), 0); const del = s.files.reduce((n, x) => n + (Number(x.del) || 0), 0);
       html += `<div class="sect"><span>Changes</span><i>${s.total}${s.total ? ` · <span class="plus">+${add}</span> <span class="minus">−${del}</span>` : ''}</i></div>${s.files.map((x) => fileLine(x)).join('') || '<div class="gnote" style="padding:22px 30px">Nothing has changed since the last commit.</div>'}${s.total > s.files.length ? `<div class="gnote" style="padding:14px 30px">${s.total - s.files.length} more are not listed.</div>` : ''}`;
       html += `<div class="sect"><span>Commits</span></div>${(d.log || []).map((c) => `<button class="gline" type="button" data-gsha="${esc(c.sha)}" data-subject="${esc(c.subject)}"><span class="p"><b class="two">${esc(c.subject)}</b><span>${esc(c.who)} · ${esc(c.ago)}${c.unpushed ? ' · <span class="ahead">not pushed</span>' : ''}</span></span></button>`).join('') || '<div class="gnote" style="padding:22px 30px">No commits yet.</div>'}`;
     }
   } else if (f.k === 'commit') {
-    $('#gtitle').textContent = f.subject || f.sha.slice(0, 8); $('#gsub').textContent = `${f.sha.slice(0, 8)}${d ? ` · ${d.who} · ${d.at}` : ''}`;
+    gitUI().title.textContent = f.subject || f.sha.slice(0, 8); gitUI().sub.textContent = `${f.sha.slice(0, 8)}${d ? ` · ${d.who} · ${d.at}` : ''}`;
     html = d ? `<div class="gmsg">${esc(d.message)}</div><div class="sect"><span>Files</span><i>${d.files.length}</i></div>${d.files.map((x) => fileLine({ path: x.path, staged: 'M', work: '.', add: x.add, del: x.del }, 'commit', f.sha)).join('')}` : wait;
   } else {
-    const at = f.path.lastIndexOf('/'); $('#gtitle').textContent = f.path.slice(at + 1); $('#gsub').textContent = [at > 0 ? f.path.slice(0, at) : '', f.kind === 'commit' ? f.sha.slice(0, 8) : f.kind === 'new' ? 'new file' : 'not committed'].filter(Boolean).join(' · ');
+    const at = f.path.lastIndexOf('/'); gitUI().title.textContent = f.path.slice(at + 1); gitUI().sub.textContent = [at > 0 ? f.path.slice(0, at) : '', f.kind === 'commit' ? f.sha.slice(0, 8) : f.kind === 'new' ? 'new file' : 'not committed'].filter(Boolean).join(' · ');
     html = d ? (d.text.trim() ? `<div class="diff${G.wrap ? '' : ' nowrap'}"><div class="in">${diffHtml(d.text)}</div></div>${d.cut ? '<div class="gnote">The rest of this diff is too long to show here.</div>' : ''}` : '<div class="gnote">No difference in the text of this file (it may be a binary file, or only its mode changed).</div>') : wait;
   }
   el.innerHTML = html; if (!fresh) el.scrollTop = keep;
 }
+// Git, inside a session: the repo its folder is, with what has changed there. The same screens as from Projects, and the line
+// to write to the session stays under them.
+function startSGit(c) {
+  const s = listed(c.name); G.inline = true; document.body.classList.remove('gitting');
+  const r = s && (G.repos.find((x) => x.proj === s.proj && x.folder === s.project) || G.repos.find((x) => x.folder === s.project) || (s.proj == null ? null : G.repos.find((x) => x.proj === s.proj)));
+  if (r) { G.cur = r; G.stack = [{ k: 'repo' }]; drawGit(true); $('#sgbody').scrollTop = 0; return gitAsk(); }
+  G.cur = null; G.stack = []; $('#sgback').hidden = true; $('#sgwrap').hidden = true; $('#sgtitle').textContent = s ? s.project : ''; $('#sgsub').textContent = '';
+  $('#sgbody').innerHTML = `<div class="gnote">${G.loaded ? 'This session’s folder is not a git repo of one of the projects on the computer.' : 'Looking for this session’s repo…'}</div>`;
+  if (!G.loaded) send({ op: 'repos' });
+}
+function dropSGit() { G.inline = false; G.cur = null; G.stack = []; }
 // while a repo or a diff is on the screen it is asked again: the files change as the sessions work
 setInterval(() => { if (!S.up || document.visibilityState !== 'visible') return; if (G.cur) gitAsk(); else if (G.tab === 'projects') send({ op: 'repos' }); }, 6000);
 
@@ -760,7 +795,7 @@ $('#pairin').addEventListener('input', (e) => { const el = e.target; const v = e
 let endTimer = 0;
 function armEnd(on) { const b = $('#mend'); clearTimeout(endTimer); b.dataset.sure = on ? '1' : ''; b.textContent = on ? 'Tap again to end it' : 'End session'; if (on) endTimer = setTimeout(() => armEnd(false), 4000); }
 // the round button: send what is typed; with nothing typed, stop a working conversation, or press Enter in a terminal
-function grow() { const t = $('#line'); t.style.height = 'auto'; t.style.height = `${Math.min(130, t.scrollHeight + 2)}px`; const c = S.cur; const has = !!t.value.trim(); const what = has ? 'send' : c && c.mode !== 'term' ? (c.working ? 'stop' : 'send') : 'enter'; const b = $('#send'); b.className = `send${what === 'send' && has ? '' : what === 'stop' ? ' stop' : ' quiet'}`; b.innerHTML = IC[what]; b.dataset.what = has ? 'send' : what; b.setAttribute('aria-label', what === 'stop' ? 'Stop' : what === 'enter' ? 'Press Enter in the session' : 'Send'); }
+function grow() { const t = $('#line'); t.style.height = 'auto'; t.style.height = `${Math.min(130, t.scrollHeight + 2)}px`; const c = S.cur; const has = !!t.value.trim(); const what = has ? 'send' : c && !termish(c) ? (c.working ? 'stop' : 'send') : 'enter'; const b = $('#send'); b.className = `send${what === 'send' && has ? '' : what === 'stop' ? ' stop' : ' quiet'}`; b.innerHTML = IC[what]; b.dataset.what = has ? 'send' : what; b.setAttribute('aria-label', what === 'stop' ? 'Stop' : what === 'enter' ? 'Press Enter in the session' : 'Send'); }
 // several lines go into a terminal as one paste, so that a line break does not send half a message
 const typed = (text) => /\n/.test(text) ? `\x1b[200~${text}\x1b[201~` : text;
 
@@ -817,7 +852,7 @@ document.addEventListener('click', (e) => {
   if (s && t.closest('[data-act=esc]')) return void send({ op: 'say', name: s.name, text: '\x1b', enter: false });
   if (s && t.closest('.open')) return openView(s);
   if (t.closest('#answers [data-opt]')) { const c = S.cur; if (!c) return; buzz(15); const o = t.closest('[data-opt]').dataset.opt; if (c.mode === 'term') send({ op: 'in', id: c.id, data: o }); else send({ op: 'say', name: c.name, text: o, enter: false }); return; }
-  if (t.closest('[data-mode]')) { const m = t.closest('[data-mode]').dataset.mode; if (m !== 'web') store.set('maestro-mode', m); if (S.cur) S.cur.toChat = false; return setMode(m); }
+  if (t.closest('[data-mode]')) { const m = t.closest('[data-mode]').dataset.mode; if (m === 'chat' || m === 'detail') store.set('maestro-mode', m); if (S.cur) S.cur.toChat = false; return setMode(m); }
   if (t.closest('[data-wpage]')) { const c = S.cur; if (c && c.mode === 'web') { c.wpick = t.closest('[data-wpage]').dataset.wpage; send({ op: 'browser', name: c.name, page: c.wpick }); drawWeb(); } return; }
   if (t.closest('#add')) { $('#nfind').value = ''; drawNew(); return sheet('#sheet-new'); }
   if (t.closest('#prefs')) { drawPrefs(); return sheet('#sheet-prefs'); }
@@ -825,8 +860,8 @@ document.addEventListener('click', (e) => {
   if (t.closest('[data-home]')) return homeTab(t.closest('[data-home]').dataset.home);
   if (t.closest('#scanbtn')) return scan();
   if (t.closest('#scanstop')) return scanStop();
-  if (t.closest('#gback')) return gitBack();
-  if (t.closest('#gwrap')) { G.wrap = !G.wrap; store.set('maestro-wrap', G.wrap ? null : '0'); return drawGit(true); }
+  if (t.closest('#gback') || t.closest('#sgback')) return gitBack();
+  if (t.closest('#gwrap') || t.closest('#sgwrap')) { G.wrap = !G.wrap; store.set('maestro-wrap', G.wrap ? null : '0'); return drawGit(true); }
   if (t.closest('[data-repo]')) { const r = G.repos.find((x) => `${x.proj}|${x.repo}` === t.closest('[data-repo]').dataset.repo); if (r) openRepo(r); return; }
   if (t.closest('[data-gsess]')) { const who = listed(t.closest('[data-gsess]').dataset.gsess); if (who) { closeGit(); openView(who); } return; }
   if (t.closest('[data-gfile]')) { const b = t.closest('[data-gfile]'); return gitPush({ k: 'diff', kind: b.dataset.kind, path: b.dataset.gfile, sha: b.dataset.sha || '' }); }
@@ -836,7 +871,8 @@ document.addEventListener('click', (e) => {
   if (t.closest('[data-proj]')) { S.proj = t.closest('[data-proj]').dataset.proj; const f = $('#nfind'); f.value = ''; f.blur(); return drawNew(); }
   if (t.closest('[data-kind]')) { S.kind = t.closest('[data-kind]').dataset.kind; return drawNew(); }
   if (t.closest('#back')) return closeView();
-  if (t.closest('#more')) { const c = S.cur; if (!c) return; $('#mtitle').textContent = c.label; $('#msize').textContent = fontSize(); return sheet('#sheet-more'); }
+  if (t.closest('#mraw')) { sheet(null); return setMode('term'); }
+  if (t.closest('#more')) { const c = S.cur; if (!c) return; $('#mraw').hidden = c.kind !== 'claude' || c.mode === 'term'; $('#mtitle').textContent = c.label; $('#msize').textContent = fontSize(); return sheet('#sheet-more'); }
   if (t.closest('[data-size]')) { S.font = Math.max(-3, Math.min(7, S.font + Number(t.closest('[data-size]').dataset.size))); store.set('maestro-font', String(S.font)); $('#msize').textContent = fontSize(); if (S.cur && S.cur.term) { S.cur.term.options.fontSize = fontSize(); refit(); } return; }
   if (t.closest('#mend')) { const c = S.cur; if (!c || !c.name) return sheet(null); if (!$('#mend').dataset.sure) return armEnd(true); send({ op: 'end', name: c.name }); sheet(null); return closeView(); }
 });
@@ -856,7 +892,7 @@ document.addEventListener('submit', (e) => {
   if (f.id === 'sheet-new') { if (S.proj == null) return say('No project here keeps its sessions running', 'bad'); store.set('maestro-proj', S.proj); const p = S.projects.find((x) => String(x.i) === String(S.proj)); const text = S.kind === 'claude' ? $('#nprompt').value.trim() : ''; openView({ name: '', kind: S.kind, label: text ? text.replace(/\s+/g, ' ').slice(0, 60) : S.kind === 'claude' ? 'Claude' : 'Shell', project: p ? p.name : '' }, { kind: S.kind, proj: Number(S.proj), prompt: text, place: p ? p.name : '' }); $('#nprompt').value = ''; return; }
   if (f.id === 'compose') {
     const c = S.cur; const inp = $('#line'); if (!c) return; const text = inp.value; const what = $('#send').dataset.what; inp.value = ''; buzz(10);
-    if (c.mode !== 'term') { if (text.trim()) { send({ op: 'say', name: c.name, text: text.trim() }); if (c.mode === 'web') say('Sent'); const box = $('#chat'); setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50); } else if (what === 'stop') send({ op: 'say', name: c.name, text: '\x1b', enter: false }); }
+    if (!termish(c)) { if (text.trim()) { send({ op: 'say', name: c.name, text: text.trim() }); if (c.mode === 'web' || c.mode === 'git') say('Sent'); const box = $('#chat'); setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50); } else if (what === 'stop') send({ op: 'say', name: c.name, text: '\x1b', enter: false }); }
     else if (text) { send({ op: 'in', id: c.id, data: typed(text) }); setTimeout(() => send({ op: 'in', id: c.id, data: '\r' }), 110); } else send({ op: 'in', id: c.id, data: '\r' });
     return grow();
   }

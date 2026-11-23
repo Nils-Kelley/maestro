@@ -34,6 +34,10 @@ cannot connect, look for another firewall or security product on the computer th
 - **Read a session in detail.** Beside Chat, Detail shows every step with all it was given (the command, the edit) and what
   came back, as it happens. It is read from the record Claude Code keeps, so the session is not slowed or changed by being
   watched. Reasoning is shown where that record holds it; for most models it holds none.
+- **See what a session has changed.** A session has a Git view: the changed files of the repo it works in, and each file's
+  diff, kept up to date while it works. The line to write to the session stays under it.
+- **A terminal of your own beside it.** On a Claude Code session, Terminal is a shell in the same project, yours to run
+  things in; it is started the first time and kept. Claude Code's own screen is under `···`.
 - **Start a session**: Claude Code with a first message, or a shell, in any project that keeps its sessions running.
 - **Look at the projects.** Projects lists every repo with its branch, how many files have changed and which sessions are at
   work in it. A repo opens to its changed files and last commits, and a file to its diff, which follows the file as a session

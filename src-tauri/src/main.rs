@@ -2311,10 +2311,12 @@ fn remote_list() -> Value {
         let screens = run("--peek");
         let browsers = run("--browsers");
         let screen_of = |name: &str| screens.split('\u{1e}').find_map(|b| b.strip_prefix(name).and_then(|r| r.strip_prefix('\n'))).unwrap_or("").to_string();
+        // which project of the list a session's folder is: the one whose folder it is, as that side of the machine spells it
+        let folders: Vec<(usize, String)> = c["projects"].as_array().map(|a| a.iter().enumerate().flat_map(|(i, p)| ["wslRoot", "root"].into_iter().filter_map(move |k| p[k].as_str().filter(|v| !v.is_empty()).map(|v| (i, v.trim_end_matches(['/', '\\']).to_string())))).collect()).unwrap_or_default();
         for l in run("--list").lines() {
             let f: Vec<&str> = l.split('\t').collect();
             if f.len() < 6 || !ours(f[0]) { continue; }
-            sessions.push(json!({ "name": f[0], "created": f[1].parse::<i64>().unwrap_or(0), "kind": if f[2].is_empty() { "ubuntu" } else { f[2] }, "label": f[3], "project": f[4].rsplit('/').next().unwrap_or(""), "screen": screen_of(f[0]), "browser": browsers.lines().any(|b| b.split('\t').next() == Some(f[0])) }));
+            sessions.push(json!({ "name": f[0], "created": f[1].parse::<i64>().unwrap_or(0), "kind": if f[2].is_empty() { "ubuntu" } else { f[2] }, "label": f[3], "project": f[4].rsplit('/').next().unwrap_or(""), "screen": screen_of(f[0]), "proj": folders.iter().find(|(_, d)| d == f[4].trim_end_matches('/')).map(|(i, _)| *i), "browser": browsers.lines().any(|b| b.split('\t').next() == Some(f[0])) }));
         }
     }
     json!({ "op": "list", "projects": projects, "sessions": sessions })
@@ -2883,7 +2885,8 @@ fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, ter
                     if p.host() == Host::Direct { return Err("this project's sessions end with the app: start it at the computer".into()); }
                     (p, kind, "new".to_string(), None)
                 };
-                let label = first.clone().unwrap_or_else(|| if kind == "claude" { "Claude".into() } else { "Shell".into() });
+                let named: String = one_line(&s("label")).chars().filter(|c| !c.is_control()).take(60).collect();
+                let label = Some(named).filter(|n| !n.trim().is_empty()).or(first.clone()).unwrap_or_else(|| if kind == "claude" { "Claude".into() } else { "Shell".into() });
                 let (cmd, made) = session_command(p, kind, mode, name, None, first, Some(label))?;
                 let (tx, shown) = (tx.clone(), id.clone());
                 spawn_term(terms, id.clone(), cmd, n("cols", 80), n("rows", 24), move |data| {

@@ -50,7 +50,8 @@ Your running sessions on your phone or another computer, over your own [Tailscal
 until you turn it on.
 
 - Every session as a card: working, waiting for you or idle. Answer a question with one tap, or reply without opening it.
-- Open a session as its conversation, in detail (every step and its output) or as a full terminal, and start new ones.
+- Open a session as its conversation or in detail (every step and its output), see what it has changed in git, and run
+  things in a terminal beside it.
 - Watch the browser a session drives, live.
 - Projects: each repo's branch, changed files and commits, with diffs you can read on a phone.
 - Notifications when a session finishes or needs you.
