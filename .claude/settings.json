@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node tools/check-page.mjs)",
+      "Bash(node tools/leak-check.mjs:*)",
+      "Bash(node tools/preview/serve.mjs:*)",
+      "Bash(tools/build.sh:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ]
+  }
+}

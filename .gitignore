@@ -16,3 +16,7 @@ maestro.log
 # captures made while testing
 shot*.png
 .playwright-mcp/
+
+# notes of one working session and its timings
+.claude/SESSION.md
+.claude/METRICS.md
