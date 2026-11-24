@@ -47,6 +47,51 @@ cannot connect, look for another firewall or security product on the computer th
   enlarge it; when the browser has several pages open, choose which to look at. It only shows: nothing is tapped or typed
   into the page from here. It needs one setting, below.
 
+- **See the computer's screens, and use them.** Screens, beside Sessions and Projects, shows every display of the computer
+  as it is now. Tap one to have it alone, turn the phone to give it the width, pinch or double-tap to enlarge it (it is
+  sent sharper as you do, up to the display's own pixels), and the button with the four corners leaves nothing but the display: the bar above it and the one under it go, what a finger does stays as it was chosen, and two small buttons over the picture bring the bars back and open the keyboard. A device
+  that was also given the pointer and the keys can click and type there. Both are given at the computer, below.
+
+### The computer's screens
+
+A paired device is not shown the screens until you say so at the computer. On the Remote access screen, each device has
+what it may do under its name:
+
+- **Let it see the screens** shows it every display. It looks and does not touch.
+- **Let it use the pointer and the keys** lets it click and type on the display it is looking at. It brings the screens with
+  it, and goes when the screens are stopped.
+- Either is given **for an hour**, **for a day**, or **until you take it back**. What runs out or is taken back holds within
+  two seconds for a device that is using it, and a button the device was holding down is let go.
+- **Only let it watch** is the other way round: nothing is typed, started or ended from that device, in the sessions or on
+  the screens. It still sees the sessions.
+
+While a device looks, or uses the pointer, the top of the Maestro window says so, a line says so when it starts, and each
+start and end is written to `maestro.log`.
+
+With the pointer and the keys, the bar under the display chooses what a finger does:
+
+- **Look**: a finger moves the picture, two enlarge it. Nothing reaches the computer.
+- **Trackpad**: a finger moves the computer's pointer and a tap clicks. Two fingers scroll, or tapped together click the
+  right button. A finger held down, then moved, drags. Two fingers pinched still enlarge the picture, and an enlarged
+  picture follows the pointer.
+- **Touch**: a tap clicks where it lands; held down, it clicks the right button there. A finger still moves the picture.
+- The keyboard button brings up the phone's own keyboard, dictation included, and a row of the keys it lacks. `ctrl`, `alt`,
+  `shift` and `win` stay down for the one key that follows: `ctrl`, then `c`.
+
+On a computer, the mouse over the picture is the other computer's mouse, and the keyboard its keyboard (`Esc` included: leave
+with the back button).
+
+A display is sent when it has changed and the last picture has been shown, so a slow connection gets fewer pictures rather
+than old ones, and a display where nothing moves costs nothing. After the first picture only the parts that changed are
+sent: a line typed in a terminal is a few kilobytes, not the whole display again. All displays together are small pictures,
+about one a second each. With [dark screens](configuration.md) on, the device sees what is under the black, not the black;
+a click from the device brings the screens back, as a click at the computer does.
+
+This works where Maestro runs on Windows. What needs administrator rights is neither shown nor used: the prompt that asks
+for them, the lock screen, a window of a program that runs as administrator (it is seen, and takes no clicks or keys), and
+the picture of a window that forbids being captured. Under `maestro --remote` there is no window to give these in: they are
+given where Maestro runs with its window, or in `maestro.config.json`.
+
 ### The browser view
 
 A session's browser can be watched when its Chrome was started with a debugging port. For the Playwright tool
@@ -88,20 +133,39 @@ Turned on, Maestro listens on one port (4747, or `remote.port` in [`maestro.conf
   written to disk. The link carries it after the `#`, which a browser does not send to a server.
 - **Each device has a token of its own.** Pairing gives the device a random token, kept in that browser's storage. The
   computer keeps only the token's SHA-256, so nothing in `maestro.config.json` or its `.bak` lets anyone in.
+- **The token is replaced every day**, as the device connects. The one before it works only until the new one has been
+  used once. Shown again after that, it means a copy of it exists somewhere: the device is removed on the spot, the
+  window says so, and it has to pair again. A copied token is therefore good for a day at most, and using it gives it away.
 - **A device can be removed.** The Remote access screen lists the paired devices and which are connected now. **Remove** stops
   a device's token and cuts its connection at once. A device that has not connected for 30 days has to pair again.
-- **You can see it.** While a device is connected, the top of the Maestro window says so. Every pairing, connection, refusal
+- **What a device may do is given device by device.** The screens, and the pointer and the keys on them, are off for a
+  device that was just paired, and can be given for an hour or a day. A device can be set to only watch.
+- **You can see it.** While a device is connected, the top of the Maestro window says so, and also when it is looking at
+  the screens or using the pointer. Every pairing, connection, refusal
   and removal is written to `maestro.log` with the time and the address.
+- **The page runs its own script and no other.** The browser is told which script the page carries, by its SHA-256, and
+  runs nothing else: text that reaches the page from a session or a file name cannot become a script there.
 - **Guessing is shut out.** After five wrong codes from one address, that address is not answered for five minutes. The six
   digits are a short form of the same code, so they stand for five tries in all: after the fifth wrong one the code is gone
   and a new one has to be made.
 
 A paired device can type into your sessions and start new ones. That is as much as sitting at the computer, so pair only
-devices that are yours, keep a screen lock on them, and remove one that is lost. The page itself cannot read or change a
-project's files; a session can, as it always could.
+devices that are yours, keep a screen lock on them, and remove one that is lost. A device that may see the screens sees
+everything on them: mail, messages, a password you show.
+
+What a device is given is a wall only for a device that may only watch. A device that types into a session can run any
+program there, one that takes a picture of the screen or one that changes `maestro.config.json` included: for such a device
+the screens permission prevents accidents and makes looking visible, no more. To show somebody the sessions and be sure of
+the rest, set their device to only watch.
 
 The connection is plain HTTP inside Tailscale, which encrypts everything between your devices. Maestro adds no encryption of
 its own, which is why it answers nothing else. Your Tailscale account is the front door: protect it with two-step sign-in.
+
+With the secure address on (Tailscale answers `https://<this computer's name>` with a certificate of its own and hands the
+request to Maestro), **Answer only at the secure address** makes that the one way in for other devices: the plain address
+sends them on and talks to none of them. Everything then travels under TLS as well as inside Tailscale. A device paired at
+the plain address pairs once more at the secure one. If the secure address is turned off or stops being served, the plain
+one answers again, so the setting cannot lock every device out.
 
 ## Without the window
 

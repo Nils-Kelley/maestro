@@ -16,7 +16,8 @@ Maestro keeps one file, `maestro.config.json`. The app writes it; you rarely edi
 | `checkUpdates` | `true` to ask GitHub for the latest release at each start. Off unless you turn it on. |
 | `remote.on`, `port` | [Remote access](remote.md): whether it is on, and the port it listens on (4747). |
 | `remote.page` | For work on the remote page only: a file to serve in place of the built-in page. Leave it out otherwise. |
-| `remote.devices[]` | The paired devices: a name, when each was paired and last seen, and the SHA-256 of its token (never the token). Written by the app. |
+| `remote.devices[]` | The paired devices: a name, when each was paired and last seen, the SHA-256 of its token (never the token), and what it may do (`type`, `screens`, `control`, with `screensUntil` and `controlUntil` as times, 0 for no end). Written by the app. |
+| `remote.secureOnly` | Other devices are answered at the secure address only; the plain one sends them on. Set on the Remote access screen. |
 | `projects[].name`, `root` | The name shown and the folder, as Windows opens it |
 | `projects[].runs` | Where this project's agent runs: `wsl` or `windows` on Windows, `native` on macOS and Linux |
 | `projects[].wslRoot`, `distro` | The folder as WSL sees it, and the distro (WSL projects) |

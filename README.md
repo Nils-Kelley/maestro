@@ -53,6 +53,8 @@ until you turn it on.
 - Open a session as its conversation or in detail (every step and its output), see what it has changed in git, and run
   things in a terminal beside it.
 - Watch the browser a session drives, live.
+- The computer's own screens: every display, or one of them filling the phone. If you allow it, its pointer and keys as
+  well: a trackpad under your finger, the phone's keyboard. (Where Maestro runs on Windows, for now.)
 - Projects: each repo's branch, changed files and commits, with diffs you can read on a phone.
 - Notifications when a session finishes or needs you.
 
@@ -64,7 +66,9 @@ To set it up:
    screen.
 
 Only your own Tailscale devices are answered, and only after pairing. A paired device can type into your sessions, so pair
-only devices that are yours. The details are in [docs/remote.md](docs/remote.md).
+only devices that are yours. What else a device may do is given at the computer, device by device: see the screens, use the
+pointer and the keys (each for an hour, a day, or until you take it back), or only watch. The details are in
+[docs/remote.md](docs/remote.md).
 
 ## The harness
 

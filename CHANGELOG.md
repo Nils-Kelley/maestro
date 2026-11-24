@@ -6,10 +6,26 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 ## [Unreleased]
 
 ### Added
+- The computer's screens on a paired device: Screens on the remote page shows every display, and one of them alone, enlarged
+  with two fingers and filling the phone when it is turned. Only the parts of a display that changed are sent. Windows only
+  for now.
+- The computer's pointer and keys from a paired device, on the display it is looking at: a trackpad (a finger moves the
+  pointer, a tap clicks, two fingers scroll, held down it drags), touch (a tap clicks where it lands), the phone's keyboard
+  with a row of keys beside it, and the mouse and keyboard of another computer.
+- What a paired device may do, device by device, on the Remote access screen: see the screens, use the pointer and the keys
+  (each for an hour, a day, or until taken back), or only watch. The window says while a device looks or uses the pointer.
 - Dark screens: a button beside the pin, `> Dark screens`, a key (`Ctrl+Alt+D`, or `darkHotkey`) or a paired phone switches
   every display off and keeps the computer awake, so sessions go on and a phone still reaches them. A key or a click brings
   the screens back; moving the mouse does not.
 - A release has a name of its own (0.4.1.1) beside the three numbers Cargo builds.
+
+### Security
+- The remote page names its own script to the browser by its SHA-256 and no longer allows any script written into the page:
+  text from a session cannot run as script there.
+- A device's token is replaced every day. A replaced token that is shown again ends that device's pairing: a copy is good
+  for a day at most, and using it gives it away.
+- "Answer only at the secure address": the plain address sends other devices on to the one with a certificate.
+- A device can be set to only watch: nothing is typed, started or ended from it.
 
 ## [0.4.1] - 2026-11-23
 

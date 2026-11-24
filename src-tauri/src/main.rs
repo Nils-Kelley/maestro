@@ -1846,6 +1846,9 @@ fn dark_on(app: &tauri::AppHandle) -> Result<(), String> {
             let _ = w.set_size(tauri::PhysicalSize::new(size.width, size.height));
             let _ = w.set_fullscreen(true);
             if i == 0 { let _ = w.set_focus(); }
+            // a paired device that looks at the screens sees what is under the black, not the black
+            #[cfg(windows)]
+            if let Ok(h) = w.hwnd() { screen::leave_out(h.0 as isize); }
             made += 1;
         }
     }
@@ -2171,26 +2174,113 @@ fn remote_enroll(said: &str, name: &str) -> Option<(String, String, String)> {
     save_config(&c).ok()?;
     Some((id, shown, token))
 }
-/// Which paired device a token belongs to (id, name), if it has connected recently enough.
-fn device_of(devices: &Value, token: &str, now: u64) -> Option<(String, String)> {
-    if token.len() < 32 { return None; }
+/// A device's token is replaced once it is a day old: the device is handed the next one as it connects, and the one it
+/// gave still works until the next has been used once (the answer that carried it may have been lost on the way). After
+/// that, the replaced token is a tripwire: whoever shows it holds a copy that was taken from the device, or is the device
+/// while a copy has been in use, and either way the pairing is over.
+const TOKEN_SECS: u64 = 86400;
+#[derive(Debug, PartialEq)]
+enum Known { Yes(String, String, Option<String>), Reused(String, String), No }
+/// Which paired device a token belongs to (id, name, and the token that replaces it when it is time), if the device has
+/// connected recently enough. `true` when what is kept of the device changed and has to be written down.
+fn device_turn(devices: &mut Value, token: &str, now: u64, fresh: &dyn Fn() -> Option<String>) -> (Known, bool) {
+    if token.len() < 32 { return (Known::No, false); }
     let hash = token_hash(token);
-    devices.as_array()?.iter().find(|d| same_token(d["hash"].as_str().unwrap_or(""), &hash) && now.saturating_sub(d["seen"].as_u64().unwrap_or(0)) < DEVICE_IDLE_SECS)
-        .map(|d| (d["id"].as_str().unwrap_or("").to_string(), d["name"].as_str().unwrap_or("A device").to_string()))
+    let Some(list) = devices.as_array_mut() else { return (Known::No, false) };
+    for d in list.iter_mut() {
+        let is = |k: &str| d[k].as_str().map(|h| same_token(h, &hash)).unwrap_or(false);
+        let (current, replaced, retired) = (is("hash"), is("prev"), is("old"));
+        if !(current || replaced || retired) { continue; }
+        let (id, name) = (d["id"].as_str().unwrap_or("").to_string(), d["name"].as_str().unwrap_or("A device").to_string());
+        if !current && !replaced { return (Known::Reused(id, name), false); }
+        if now.saturating_sub(d["seen"].as_u64().unwrap_or(0)) >= DEVICE_IDLE_SECS { return (Known::No, false); }
+        let turned = d["rotated"].as_u64().or(d["added"].as_u64()).unwrap_or(0);
+        if current {
+            // the device has its newest token: the one before it is retired
+            let mut changed = false;
+            if d["prev"].is_string() { d["old"] = d["prev"].take(); if let Some(o) = d.as_object_mut() { o.remove("prev"); } changed = true; }
+            if now.saturating_sub(turned) >= TOKEN_SECS {
+                if let Some(t) = fresh() {
+                    d["prev"] = d["hash"].take();
+                    d["hash"] = json!(token_hash(&t));
+                    d["rotated"] = json!(now);
+                    return (Known::Yes(id, name, Some(t)), true);
+                }
+            }
+            return (Known::Yes(id, name, None), changed);
+        }
+        // the token that replaced this one never arrived: after a while another is made in its place
+        if now.saturating_sub(turned) >= 300 {
+            if let Some(t) = fresh() {
+                d["hash"] = json!(token_hash(&t));
+                d["rotated"] = json!(now);
+                return (Known::Yes(id, name, Some(t)), true);
+            }
+        }
+        return (Known::Yes(id, name, None), false);
+    }
+    (Known::No, false)
 }
-/// The device a token belongs to; when it was last seen is written down at most once an hour.
-fn remote_known(token: &str) -> Option<(String, String)> {
-    let _one = REMOTE_CONFIG.lock().ok()?;
-    let mut c = config();
-    let now = now_secs();
-    let found = device_of(&c["remote"]["devices"], token, now)?;
-    let stale = c["remote"]["devices"].as_array_mut().and_then(|a| a.iter_mut().find(|d| d["id"] == found.0.as_str())).map(|d| {
-        let old = now.saturating_sub(d["seen"].as_u64().unwrap_or(0)) > 3600;
-        if old { d["seen"] = json!(now); }
-        old
-    }).unwrap_or(false);
-    if stale { let _ = save_config(&c); }
-    Some(found)
+/// The device a token belongs to, and its next token when it is time for one; when it was last seen is written down at most
+/// once an hour. A token that had been replaced and is shown again ends that device's pairing.
+fn remote_known(token: &str) -> Option<(String, String, Option<String>)> {
+    let known = {
+        let _one = REMOTE_CONFIG.lock().ok()?;
+        let mut c = config();
+        let now = now_secs();
+        let (known, changed) = device_turn(&mut c["remote"]["devices"], token, now, &|| hex_random(16).ok());
+        match known {
+            Known::Yes(id, name, next) => {
+                let stale = c["remote"]["devices"].as_array_mut().and_then(|a| a.iter_mut().find(|d| d["id"] == id.as_str())).map(|d| {
+                    let old = now.saturating_sub(d["seen"].as_u64().unwrap_or(0)) > 3600;
+                    if old { d["seen"] = json!(now); }
+                    old
+                }).unwrap_or(false);
+                let kept = if changed || stale { save_config(&c).is_ok() } else { true };
+                // (a new token that could not be written down is not handed out: the device keeps the one it has)
+                if next.is_some() && !kept { return None; }
+                Known::Yes(id, name, next)
+            }
+            Known::Reused(id, name) => {
+                if let Some(list) = c["remote"]["devices"].as_array_mut() { list.retain(|d| d["id"] != id.as_str()); }
+                let _ = save_config(&c);
+                Known::Reused(id, name)
+            }
+            Known::No => Known::No,
+        }
+    };
+    match known {
+        Known::Yes(id, name, next) => Some((id, name, next)),
+        Known::Reused(id, name) => {
+            if let Ok(live) = REMOTE_LIVE.lock() { for l in live.iter().filter(|l| l.device == id) { l.cut.store(true, std::sync::atomic::Ordering::Relaxed); } }
+            remote_tell("removed, because a token of it that had been replaced was used again (it has to pair again)", &name, None);
+            None
+        }
+        Known::No => None,
+    }
+}
+/// What a paired device may do. Typing into sessions (and starting and ending them) is allowed unless it was taken away;
+/// seeing the screens, and using the pointer and the keys on them, are not allowed until they are given, for a time or
+/// until they are taken back. The pointer and the keys go with the screens: without the one there is not the other.
+fn device_may(devices: &Value, device: &str, what: &str, now: u64) -> bool {
+    let Some(d) = devices.as_array().and_then(|a| a.iter().find(|d| d["id"] == device)) else { return false };
+    let given = |k: &str| d[k].as_bool().unwrap_or(false) && d[format!("{k}Until").as_str()].as_u64().map(|t| t == 0 || now < t).unwrap_or(true);
+    match what {
+        "type" => d["type"].as_bool().unwrap_or(true),
+        "screens" => given("screens"),
+        "control" => given("screens") && given("control"),
+        _ => false,
+    }
+}
+/// The same, of the devices as they are written down now: looked up at most once a second for each device and thing.
+static DEVICE_MAY: Mutex<Vec<(String, String, std::time::Instant, bool)>> = Mutex::new(Vec::new());
+fn device_may_now(device: &str, what: &str) -> bool {
+    let Ok(mut seen) = DEVICE_MAY.lock() else { return false };
+    seen.retain(|s| s.2.elapsed() < std::time::Duration::from_secs(1));
+    if let Some(s) = seen.iter().find(|s| s.0 == device && s.1 == what) { return s.3; }
+    let may = device_may(&config()["remote"]["devices"], device, what, now_secs());
+    seen.push((device.to_string(), what.to_string(), std::time::Instant::now(), may));
+    may
 }
 /// Wrong codes from one address: after five, that address is not listened to for five minutes.
 static REMOTE_FAILS: Mutex<Vec<(std::net::IpAddr, u32, std::time::Instant)>> = Mutex::new(Vec::new());
@@ -2287,6 +2377,23 @@ fn remote_head(head: &[u8]) -> Option<(String, String, Vec<(String, String)>)> {
     let headers = lines.filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))).collect();
     Some((method.to_string(), target.split('?').next().unwrap_or("/").to_string(), headers))
 }
+/// The scripts a browser may run for a page served here: the files of this server, and each script written into the page
+/// itself, named by its SHA-256 (of the text as a browser reads it, every line ending a single line feed).
+fn remote_scripts(page: &[u8]) -> String {
+    use base64::Engine;
+    use sha2::Digest;
+    let text = String::from_utf8_lossy(page).replace("\r\n", "\n").replace('\r', "\n");
+    let (mut out, mut rest) = (String::from("'self'"), text.as_str());
+    while let Some(at) = rest.find("<script>") {
+        let body = &rest[at + 8..];
+        let Some(end) = body.find("</script>") else { break };
+        out.push_str(&format!(" 'sha256-{}'", base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(body[..end].as_bytes()))));
+        rest = &body[end..];
+    }
+    out
+}
+/// Whether a request is one to send on to the secure address: that was asked for, and it came from another device.
+fn secure_only(asked: bool, from_this_machine: bool) -> bool { asked && !from_this_machine }
 /// One connection: a file of the page, or the WebSocket the page talks through.
 fn remote_conn(mut s: std::net::TcpStream, peer: std::net::IpAddr, stop: &std::sync::atomic::AtomicBool) {
     use std::io::{Read, Write};
@@ -2304,12 +2411,28 @@ fn remote_conn(mut s: std::net::TcpStream, peer: std::net::IpAddr, stop: &std::s
         match s.read(&mut b) { Ok(0) | Err(_) => return, Ok(n) => head.extend_from_slice(&b[..n]) }
     }
     let plain = |s: &mut std::net::TcpStream, status: &str, kind: &str, body: &[u8]| {
-        let head = format!("HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'\r\nConnection: close\r\n\r\n", body.len());
+        // the browser runs the scripts this server serves and the one written into the page it serves, told by what that
+        // one adds up to: text that found its way into the page (a session's words, a file's name) is never run as script
+        let scripts = if kind.starts_with("text/html") { remote_scripts(body) } else { "'self'".to_string() };
+        let head = format!("HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; script-src {scripts}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'\r\nConnection: close\r\n\r\n", body.len());
         let _ = s.write_all(head.as_bytes()).and_then(|_| s.write_all(body)).and_then(|_| s.flush());
     };
     let Some((method, path, headers)) = remote_head(&head) else { return plain(&mut s, "400 Bad Request", "text/plain", b"not a request this answers") };
     let hdr = |k: &str| headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
     if method != "GET" { return plain(&mut s, "405 Method Not Allowed", "text/plain", b"GET only"); }
+    // "only the secure address": what arrives at the plain one from another device is sent on to the secure one, and is
+    // not talked to here. (What Tailscale hands on from the secure address arrives from this machine itself.)
+    if secure_only(config()["remote"]["secureOnly"].as_bool().unwrap_or(false), peer.is_loopback()) {
+        let port = REMOTE.lock().ok().and_then(|r| r.as_ref().map(|r| r.port)).unwrap_or(REMOTE_PORT);
+        let (secure, on) = remote_secure_state(port, false);
+        // (with the secure address gone, the plain one answers again: a setting must not lock every device out)
+        if on {
+            if path == "/ws" { return plain(&mut s, "403 Forbidden", "text/plain", b"this computer answers at its secure address only"); }
+            let to = format!("HTTP/1.1 308 Permanent Redirect\r\nLocation: https://{secure}{path}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+            let _ = s.write_all(to.as_bytes()).and_then(|_| s.flush());
+            return;
+        }
+    }
     if path != "/ws" {
         return match path.as_str() {
             // for work on the page itself: "remote.page" in maestro.config.json names a file to serve in place of the built-in one
@@ -2342,10 +2465,10 @@ fn remote_conn(mut s: std::net::TcpStream, peer: std::net::IpAddr, stop: &std::s
     let hello = match ws.read() { Ok(m) if m.is_text() => m.into_text().map(|t| t.as_str().to_string()).unwrap_or_default(), _ => return };
     let said = serde_json::from_str::<Value>(&hello).ok().filter(|m| m["op"] == "hello");
     let who = said.and_then(|m| match m["pair"].as_str() {
-        Some(code) => remote_enroll(code, m["name"].as_str().unwrap_or("")).map(|(id, name, token)| (id, name, Some(token))),
-        None => remote_known(m["token"].as_str().unwrap_or("")).map(|(id, name)| (id, name, None)),
+        Some(code) => remote_enroll(code, m["name"].as_str().unwrap_or("")).map(|(id, name, token)| (id, name, Some(token), true)),
+        None => remote_known(m["token"].as_str().unwrap_or("")).map(|(id, name, next)| (id, name, next, false)),
     });
-    let Some((device, name, fresh)) = who else {
+    let Some((device, name, fresh, paired)) = who else {
         remote_failed(peer);
         remote_tell("refused", "a wrong, used or expired code", Some(peer));
         std::thread::sleep(Duration::from_secs(1));
@@ -2359,16 +2482,19 @@ fn remote_conn(mut s: std::net::TcpStream, peer: std::net::IpAddr, stop: &std::s
     let conn = CONNS.fetch_add(1, Ordering::Relaxed);
     let cut = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Ok(mut live) = REMOTE_LIVE.lock() { live.push(RemoteLive { conn, device: device.clone(), cut: cut.clone() }); }
-    remote_tell(if fresh.is_some() { "paired" } else { "connected" }, &name, Some(peer));
+    remote_tell(if paired { "paired" } else { "connected" }, &name, Some(peer));
     // from here on: read what the page says for a moment, send what the sessions printed, and again
     let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(25)));
     let (tx, rx) = std::sync::mpsc::channel::<String>();
+    // (the pictures of the computer's screens go out as they are, not as text; no more than two wait here, so a device
+    // that takes them slowly is sent fewer and nothing piles up in memory)
+    let (frames, pictures) = std::sync::mpsc::sync_channel::<Vec<u8>>(2);
     let terms: TermMap = Default::default();
     let watching: Watching = Default::default();
     let mut pinged = Instant::now();
     'conn: while !stop.load(Ordering::Relaxed) && !cut.load(Ordering::Relaxed) {
         match ws.read() {
-            Ok(m) if m.is_text() => remote_op(m.into_text().map(|t| t.as_str().to_string()).unwrap_or_default().as_str(), &device, &tx, &terms, &watching),
+            Ok(m) if m.is_text() => remote_op(m.into_text().map(|t| t.as_str().to_string()).unwrap_or_default().as_str(), &device, &tx, &frames, &terms, &watching),
             Ok(m) if m.is_close() => break,
             Ok(_) => {}
             Err(tungstenite::Error::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
@@ -2376,6 +2502,9 @@ fn remote_conn(mut s: std::net::TcpStream, peer: std::net::IpAddr, stop: &std::s
         }
         while let Ok(m) = rx.try_recv() {
             if !send(&mut ws, m) { break 'conn; }
+        }
+        while let Ok(m) = pictures.try_recv() {
+            if ws.send(tungstenite::Message::binary(m)).is_err() { break 'conn; }
         }
         if pinged.elapsed() > Duration::from_secs(20) {
             pinged = Instant::now();
@@ -2418,7 +2547,7 @@ fn remote_list() -> Value {
         }
     }
     // (the screens can be made dark from a page only where there is a window to do it: not under `maestro --remote`)
-    json!({ "op": "list", "projects": projects, "sessions": sessions, "dark": DARK.load(std::sync::atomic::Ordering::SeqCst), "canDark": REMOTE_APP.get().is_some() })
+    json!({ "op": "list", "projects": projects, "sessions": sessions, "dark": DARK.load(std::sync::atomic::Ordering::SeqCst), "canDark": REMOTE_APP.get().is_some(), "canScreens": cfg!(windows) })
 }
 // ---- Notifications to a paired device (Web Push): a page that was allowed them is told when a session starts waiting or
 // finishes, while the page is closed. The message is encrypted for that one browser; the service that carries it (Apple's,
@@ -2812,7 +2941,14 @@ fn remote_git(m: &Value) -> Value {
 // started with --remote-debugging-port, that Chrome takes a second connection on a port of this computer only, and over it
 // sends a picture of the page each time the page changes. Those pictures are passed on to the one page that asked, at the
 // pace it shows them. Nothing is typed or clicked from here: the page is only looked at.
-struct Watch { name: String, stop: std::sync::atomic::AtomicBool, seen: std::sync::atomic::AtomicU64, pick: Mutex<String> }
+// (the width and the wish to be sent everything again are read where the screens are shown: on Windows;
+// and so are the pointer and the keys: whether this device may use them, on which display, which buttons it holds down)
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Default)]
+struct Watch {
+    name: String, stop: std::sync::atomic::AtomicBool, seen: std::sync::atomic::AtomicU64, pick: Mutex<String>, width: std::sync::atomic::AtomicU32, fresh: std::sync::atomic::AtomicBool,
+    control: std::sync::atomic::AtomicBool, shown: Mutex<Option<Display>>, held: std::sync::atomic::AtomicU8, used: std::sync::atomic::AtomicBool,
+}
 type Watching = std::sync::Arc<Mutex<Option<std::sync::Arc<Watch>>>>;
 /// Which sessions drive a Chrome that can be watched, and the port each one chose.
 fn browser_ports() -> Vec<(String, u16)> {
@@ -2917,13 +3053,510 @@ fn browser_watch(width: u32, w: std::sync::Arc<Watch>, tx: std::sync::mpsc::Send
 }
 /// Whether another page than the one being shown has been asked for.
 fn chosen_changed(w: &Watch, page: &str) -> bool { w.pick.lock().map(|p| !p.is_empty() && *p != page).unwrap_or(false) }
+// ---- The computer's own screens on a paired device (docs/remote.md): every display small, or one of them large. Only a
+// device that was allowed it at the computer is shown them, the window says while one is looking, and nothing is clicked or
+// typed from there. A display is looked at several times a second and sent only when it has changed and the last picture has
+// been shown: a slow connection gets fewer pictures, not a growing queue of old ones.
+/// What the watch of the screens is called among a connection's watches: no session can have this name.
+const SCREENS: &str = "\u{0}screens";
+/// The devices looking at the screens right now (one entry for each connection that does).
+static SCREEN_LIVE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// One display: where it is among the others and how large, in its own pixels.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Display { x: i32, y: i32, w: i32, h: i32, main: bool }
+/// The devices using the pointer and the keys right now.
+static SCREEN_USING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+fn screens_say(allowed: bool, control: bool, list: &[Display]) -> Value {
+    json!({ "op": "screens", "can": cfg!(windows), "allowed": allowed, "control": control, "items": list.iter().enumerate().map(|(i, d)| json!({ "i": i, "x": d.x, "y": d.y, "w": d.w, "h": d.h, "main": d.main })).collect::<Vec<Value>>() })
+}
+/// The key a name stands for, as Windows numbers them, and whether it is one of the keys beside the letters (the arrows, not
+/// the same keys on the number pad). A letter or a digit is its own key: that is how Ctrl and C are pressed together.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn screen_vk(name: &str) -> Option<(u16, bool)> {
+    Some(match name {
+        "enter" => (0x0D, false), "backspace" => (0x08, false), "tab" => (0x09, false), "esc" => (0x1B, false), "space" => (0x20, false),
+        "left" => (0x25, true), "up" => (0x26, true), "right" => (0x27, true), "down" => (0x28, true),
+        "pgup" => (0x21, true), "pgdn" => (0x22, true), "end" => (0x23, true), "home" => (0x24, true), "insert" => (0x2D, true), "delete" => (0x2E, true),
+        "shift" => (0x10, false), "ctrl" => (0x11, false), "alt" => (0x12, false), "win" => (0x5B, true),
+        f if f.len() >= 2 && f.starts_with('f') && f[1..].parse::<u16>().map(|n| (1..=12).contains(&n)).unwrap_or(false) => (0x6F + f[1..].parse::<u16>().unwrap_or(1), false),
+        k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphanumeric() => (k.as_bytes()[0].to_ascii_uppercase() as u16, false),
+        _ => return None,
+    })
+}
+/// What goes before a picture: that it is one ('S'), of which display, in how many parts, which picture this is, and the
+/// size of the whole display as it is sent. Then each part: where it goes (x, y), its size, how long its JPEG is, the JPEG.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn screen_head(display: usize, parts: usize, n: u64, w: u16, h: u16) -> [u8; 12] {
+    let (n, w, h) = ((n as u32).to_le_bytes(), w.to_le_bytes(), h.to_le_bytes());
+    [b'S', display.min(255) as u8, parts.min(255) as u8, 0, n[0], n[1], n[2], n[3], w[0], w[1], h[0], h[1]]
+}
+/// A display is compared in squares of this many pixels: a multiple of 16, so that every part begins where a JPEG of the
+/// whole would begin a block, and a part laid over the picture leaves no seam.
+#[cfg_attr(not(windows), allow(dead_code))]
+const SCREEN_SQUARE: usize = 64;
+/// Which parts of a display differ from what the device has (x, y, width, height), so that only those are sent: the squares
+/// that changed, joined side by side and then downwards where they line up. All of it when there is nothing to compare
+/// with; one part around everything when the changes are many or most of the display.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn screen_changed(old: &[u8], new: &[u8], w: u16, h: u16) -> Vec<(u16, u16, u16, u16)> {
+    let (w, h, sq) = (w as usize, h as usize, SCREEN_SQUARE);
+    if w == 0 || h == 0 || new.len() != w * h * 4 { return vec![]; }
+    if old.len() != new.len() { return vec![(0, 0, w as u16, h as u16)]; }
+    let (cols, rows) = (w.div_ceil(sq), h.div_ceil(sq));
+    // in squares: the first column, the first row, the column and the row after the last
+    let mut parts: Vec<(usize, usize, usize, usize)> = vec![];
+    let (mut open, mut changed): (Vec<usize>, usize) = (vec![], 0);
+    for r in 0..rows {
+        let differs = |c: usize| (r * sq..((r + 1) * sq).min(h)).any(|y| { let (a, b) = ((y * w + c * sq) * 4, (y * w + ((c + 1) * sq).min(w)) * 4); old[a..b] != new[a..b] });
+        let (mut next, mut c) = (vec![], 0);
+        while c < cols {
+            if !differs(c) { c += 1; continue; }
+            let from = c;
+            while c < cols && differs(c) { c += 1; }
+            changed += c - from;
+            match open.iter().copied().find(|k| parts[*k].0 == from && parts[*k].2 == c) {
+                Some(k) => { parts[k].3 = r + 1; next.push(k); }
+                None => { parts.push((from, r, c, r + 1)); next.push(parts.len() - 1); }
+            }
+        }
+        open = next;
+    }
+    if parts.len() > 16 || changed * 10 > cols * rows * 6 {
+        let around = parts.iter().fold((cols, rows, 0, 0), |a, p| (a.0.min(p.0), a.1.min(p.1), a.2.max(p.2), a.3.max(p.3)));
+        parts = vec![around];
+    }
+    parts.iter().map(|p| ((p.0 * sq) as u16, (p.1 * sq) as u16, ((p.2 * sq).min(w) - p.0 * sq) as u16, ((p.3 * sq).min(h) - p.1 * sq) as u16)).collect()
+}
+/// The pixels of one part of a display, row after row.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn screen_cut(px: &[u8], w: u16, part: (u16, u16, u16, u16)) -> Vec<u8> {
+    let (w, x, y, pw, ph) = (w as usize, part.0 as usize, part.1 as usize, part.2 as usize, part.3 as usize);
+    let mut out = Vec::with_capacity(pw * ph * 4);
+    for row in y..y + ph { out.extend_from_slice(&px[(row * w + x) * 4..(row * w + x + pw) * 4]); }
+    out
+}
+/// A number that changes when the pixels do: whether a display has to be sent again is decided by it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn screen_sum(px: &[u8]) -> u64 {
+    let mut h = 0x9E37_79B9_7F4A_7C15u64;
+    for c in px.chunks_exact(8) {
+        h = (h ^ u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])).wrapping_mul(0x0000_0100_0000_01B3);
+        h ^= h >> 29;
+    }
+    h
+}
+/// The pixels of a display (blue, green, red and a byte to spare, row after row) as a JPEG. One display large keeps its
+/// colours whole, so that small coloured text stays readable; the small ones are sent lighter.
+#[cfg(windows)]
+fn screen_jpeg(px: &[u8], w: u16, h: u16, large: bool) -> Option<Vec<u8>> {
+    if px.len() != w as usize * h as usize * 4 { return None; }
+    let mut out = Vec::with_capacity(px.len() / 24);
+    let mut e = jpeg_encoder::Encoder::new(&mut out, if large { 72 } else { 60 });
+    e.set_sampling_factor(if large { jpeg_encoder::SamplingFactor::F_1_1 } else { jpeg_encoder::SamplingFactor::F_2_2 });
+    e.encode(px, w, h, jpeg_encoder::ColorType::Bgra).ok()?;
+    Some(out)
+}
+/// Windows: the displays as the system lists them, and their pixels, copied from the desktop as it is composed. A thread that
+/// looks sees every display in its own pixels, whatever its scale; a window that asks not to be captured (the black ones of
+/// dark screens do) is left out, and what is under it is seen.
+#[cfg(windows)]
+mod screen {
+    use super::Display;
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Rect { l: i32, t: i32, r: i32, b: i32 }
+    #[repr(C)]
+    struct MonitorInfo { size: u32, all: Rect, work: Rect, flags: u32 }
+    #[repr(C)]
+    struct Point { x: i32, y: i32 }
+    #[repr(C)]
+    struct CursorInfo { size: u32, flags: u32, cursor: isize, at: Point }
+    #[repr(C)]
+    struct IconInfo { icon: i32, hot_x: u32, hot_y: u32, mask: isize, color: isize }
+    #[repr(C)]
+    struct BitmapHead { size: u32, w: i32, h: i32, planes: u16, bits: u16, compression: u32, image: u32, xppm: i32, yppm: i32, used: u32, important: u32 }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetDC(window: isize) -> isize;
+        fn ReleaseDC(window: isize, dc: isize) -> i32;
+        fn EnumDisplayMonitors(dc: isize, clip: *const Rect, each: unsafe extern "system" fn(isize, isize, *mut Rect, isize) -> i32, data: isize) -> i32;
+        fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfo) -> i32;
+        fn SetThreadDpiAwarenessContext(context: isize) -> isize;
+        fn GetCursorInfo(info: *mut CursorInfo) -> i32;
+        fn GetIconInfo(icon: isize, info: *mut IconInfo) -> i32;
+        fn DrawIconEx(dc: isize, x: i32, y: i32, icon: isize, w: i32, h: i32, step: u32, brush: isize, flags: u32) -> i32;
+        fn SetWindowDisplayAffinity(window: isize, affinity: u32) -> i32;
+    }
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn CreateCompatibleDC(dc: isize) -> isize;
+        fn DeleteDC(dc: isize) -> i32;
+        fn CreateDIBSection(dc: isize, info: *const BitmapHead, usage: u32, bits: *mut *mut u8, section: isize, offset: u32) -> isize;
+        fn SelectObject(dc: isize, object: isize) -> isize;
+        fn DeleteObject(object: isize) -> i32;
+        fn SetStretchBltMode(dc: isize, mode: i32) -> i32;
+        fn SetBrushOrgEx(dc: isize, x: i32, y: i32, old: *mut Point) -> i32;
+        fn BitBlt(to: isize, x: i32, y: i32, w: i32, h: i32, from: isize, fx: i32, fy: i32, how: u32) -> i32;
+        fn StretchBlt(to: isize, x: i32, y: i32, w: i32, h: i32, from: isize, fx: i32, fy: i32, fw: i32, fh: i32, how: u32) -> i32;
+        fn GdiFlush() -> i32;
+    }
+    const COPY: u32 = 0x00CC_0020;
+    /// (with the windows that are drawn over the others, a menu's shadow, a tooltip)
+    const LAYERED_TOO: u32 = 0x4000_0000;
+    /// This thread measures every display in its own pixels from here on (per-monitor aware, the second kind).
+    pub fn aware() -> isize { unsafe { SetThreadDpiAwarenessContext(-4) } }
+    /// A window that is not to be in any picture of the screen: what is under it is seen in its place (Windows 10 2004 on).
+    pub fn leave_out(window: isize) { unsafe { SetWindowDisplayAffinity(window, 0x11); } }
+    /// The displays, the main one first, then from left to right.
+    pub fn displays() -> Vec<Display> {
+        unsafe extern "system" fn each(monitor: isize, _dc: isize, _area: *mut Rect, data: isize) -> i32 {
+            let list = &mut *(data as *mut Vec<Display>);
+            let none = Rect { l: 0, t: 0, r: 0, b: 0 };
+            let mut info = MonitorInfo { size: 40, all: none, work: none, flags: 0 };
+            if GetMonitorInfoW(monitor, &mut info) != 0 { list.push(Display { x: info.all.l, y: info.all.t, w: info.all.r - info.all.l, h: info.all.b - info.all.t, main: info.flags & 1 != 0 }); }
+            1
+        }
+        let mut list: Vec<Display> = vec![];
+        unsafe {
+            let was = aware();
+            EnumDisplayMonitors(0, std::ptr::null(), each, &mut list as *mut Vec<Display> as isize);
+            if was != 0 { SetThreadDpiAwarenessContext(was); }
+        }
+        list.retain(|d| d.w > 0 && d.h > 0);
+        list.sort_by_key(|d| (!d.main, d.x, d.y));
+        list
+    }
+    /// Where the pointer is on a display, and which pointer it is (an arrow, a hand): nothing when it is hidden or elsewhere.
+    fn pointer(d: &Display) -> Option<(i32, i32, isize)> {
+        let mut c = CursorInfo { size: std::mem::size_of::<CursorInfo>() as u32, flags: 0, cursor: 0, at: Point { x: 0, y: 0 } };
+        if unsafe { GetCursorInfo(&mut c) } == 0 || c.flags & 1 == 0 || c.cursor == 0 { return None; }
+        let (x, y) = (c.at.x - d.x, c.at.y - d.y);
+        (x >= 0 && y >= 0 && x < d.w && y < d.h).then_some((x, y, c.cursor))
+    }
+    pub fn pointer_at(d: &Display) -> Option<(i32, i32)> { pointer(d).map(|(x, y, _)| (x, y)) }
+    /// Put this thread back to how it measured before `aware`.
+    pub fn unaware(was: isize) { if was != 0 { unsafe { SetThreadDpiAwarenessContext(was); } } }
+    // ---- the pointer and the keys: each of these is one thing the system is told happened, as if at the mouse or the
+    // keyboard. A window that runs as administrator does not take them from a program that does not.
+    #[repr(C)]
+    struct MouseIn { kind: u32, _pad: u32, dx: i32, dy: i32, data: u32, flags: u32, time: u32, extra: usize }
+    #[repr(C)]
+    struct KeyIn { kind: u32, _pad: u32, vk: u16, scan: u16, flags: u32, time: u32, extra: usize, _fill: u64 }
+    #[link(name = "user32")]
+    extern "system" {
+        fn SendInput(count: u32, inputs: *const u8, size: i32) -> u32;
+        fn GetSystemMetrics(which: i32) -> i32;
+        fn GetCursorPos(at: *mut Point) -> i32;
+        fn MapVirtualKeyW(code: u32, how: u32) -> u32;
+    }
+    /// What the system is handed is this many bytes for the mouse and for a key alike (a 64-bit Windows).
+    pub const INPUT_SIZE: usize = 40;
+    #[cfg(test)]
+    pub fn input_sizes() -> (usize, usize) { (std::mem::size_of::<MouseIn>(), std::mem::size_of::<KeyIn>()) }
+    fn mouse(flags: u32, dx: i32, dy: i32, data: u32) -> bool {
+        let i = MouseIn { kind: 0, _pad: 0, dx, dy, data, flags, time: 0, extra: 0 };
+        unsafe { SendInput(1, &i as *const MouseIn as *const u8, INPUT_SIZE as i32) == 1 }
+    }
+    fn key(vk: u16, scan: u16, flags: u32) -> bool {
+        let i = KeyIn { kind: 1, _pad: 0, vk, scan, flags, time: 0, extra: 0, _fill: 0 };
+        unsafe { SendInput(1, &i as *const KeyIn as *const u8, INPUT_SIZE as i32) == 1 }
+    }
+    /// (for the tests: where the pointer is among the displays, and whether a key is down)
+    #[cfg(test)]
+    pub fn pointer_now() -> Option<(i32, i32)> { let mut at = Point { x: 0, y: 0 }; (unsafe { GetCursorPos(&mut at) } != 0).then_some((at.x, at.y)) }
+    #[cfg(test)]
+    pub fn is_down(vk: u16) -> bool {
+        #[link(name = "user32")]
+        extern "system" { fn GetAsyncKeyState(key: i32) -> i16; }
+        unsafe { GetAsyncKeyState(vk as i32) < 0 }
+    }
+    /// The pointer goes to a place among the displays, given in their own pixels (the calling thread is `aware`).
+    pub fn point_to(x: i32, y: i32) -> bool {
+        let (left, top, w, h) = unsafe { (GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78).max(2), GetSystemMetrics(79).max(2)) };
+        // (the system turns the number back into a pixel by multiplying with the size and dropping 16 bits: the smallest
+        // number that comes back as this pixel is the one to give)
+        let part = |v: i32, from: i32, size: i32| (((v - from).clamp(0, size - 1) as i64 * 65536 + size as i64 - 1) / size as i64) as i32;
+        // moved | to a place, not by an amount | the place is counted over all displays
+        mouse(0x0001 | 0x8000 | 0x4000, part(x, left, w), part(y, top, h), 0)
+    }
+    /// The pointer moves by so many pixels, and stays on the display it is being used on.
+    pub fn point_by(dx: i32, dy: i32, d: &Display) {
+        let mut at = Point { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut at) } == 0 { return; }
+        point_to((at.x + dx).clamp(d.x, d.x + d.w - 1), (at.y + dy).clamp(d.y, d.y + d.h - 1));
+    }
+    /// A button goes down or comes up: 0 the left one, 1 the right one, 2 the middle one.
+    pub fn button(which: u8, down: bool) {
+        mouse(match (which, down) { (1, true) => 0x0008, (1, false) => 0x0010, (2, true) => 0x0020, (2, false) => 0x0040, (_, true) => 0x0002, (_, false) => 0x0004 }, 0, 0, 0);
+    }
+    /// The wheel turns: 120 is one notch, away from the hand and to the right.
+    pub fn wheel(dx: i32, dy: i32) {
+        if dy != 0 { mouse(0x0800, 0, 0, dy as u32); }
+        if dx != 0 { mouse(0x1000, 0, 0, dx as u32); }
+    }
+    /// A key goes down or comes up.
+    pub fn press(vk: u16, beside_the_letters: bool, down: bool) -> bool {
+        let scan = unsafe { MapVirtualKeyW(vk as u32, 0) } as u16;
+        key(vk, scan, if beside_the_letters { 0x0001 } else { 0 } | if down { 0 } else { 0x0002 })
+    }
+    /// Text is typed as the characters it is, whatever the keyboard's layout; a new line is the Enter key, a tab the Tab key.
+    pub fn type_text(text: &str) {
+        for c in text.chars() {
+            match c {
+                '\r' => {}
+                '\n' => { press(0x0D, false, true); press(0x0D, false, false); }
+                '\t' => { press(0x09, false, true); press(0x09, false, false); }
+                c => { let mut two = [0u16; 2]; for u in c.encode_utf16(&mut two).iter() { key(0, *u, 0x0004); key(0, *u, 0x0004 | 0x0002); } }
+            }
+        }
+    }
+    /// Pixels to draw into and to read back: a bitmap of 32 bits a pixel, the top row first.
+    struct Surface { dc: isize, bitmap: isize, before: isize, bits: *mut u8, w: i32, h: i32 }
+    impl Surface {
+        fn none() -> Surface { Surface { dc: 0, bitmap: 0, before: 0, bits: std::ptr::null_mut(), w: 0, h: 0 } }
+        unsafe fn fit(&mut self, like: isize, w: i32, h: i32) -> bool {
+            if self.bitmap != 0 && self.w == w && self.h == h { return true; }
+            self.free();
+            if w < 1 || h < 1 { return false; }
+            let dc = CreateCompatibleDC(like);
+            if dc == 0 { return false; }
+            let head = BitmapHead { size: 40, w, h: -h, planes: 1, bits: 32, compression: 0, image: 0, xppm: 0, yppm: 0, used: 0, important: 0 };
+            let mut bits: *mut u8 = std::ptr::null_mut();
+            let bitmap = CreateDIBSection(like, &head, 0, &mut bits, 0, 0);
+            if bitmap == 0 || bits.is_null() { DeleteDC(dc); return false; }
+            *self = Surface { dc, bitmap, before: SelectObject(dc, bitmap), bits, w, h };
+            true
+        }
+        unsafe fn free(&mut self) {
+            if self.bitmap != 0 { SelectObject(self.dc, self.before); DeleteObject(self.bitmap); DeleteDC(self.dc); }
+            *self = Surface::none();
+        }
+        fn px(&self) -> &[u8] {
+            if self.bits.is_null() { return &[]; }
+            unsafe { std::slice::from_raw_parts(self.bits, self.w as usize * self.h as usize * 4) }
+        }
+    }
+    /// What one watching thread looks through: the desktop, a copy of the display it looked at last, and that copy made
+    /// smaller for sending.
+    pub struct Grab { desk: isize, full: Surface, small: Surface }
+    impl Grab {
+        pub fn new() -> Option<Grab> {
+            let desk = unsafe { GetDC(0) };
+            (desk != 0).then(|| Grab { desk, full: Surface::none(), small: Surface::none() })
+        }
+        /// Copy a display as it is now, and say what it adds up to (with where the pointer is, if the pointer is drawn).
+        pub fn look(&mut self, d: &Display, with_pointer: bool) -> Option<u64> {
+            unsafe {
+                if !self.full.fit(self.desk, d.w, d.h) { return None; }
+                if BitBlt(self.full.dc, 0, 0, d.w, d.h, self.desk, d.x, d.y, COPY | LAYERED_TOO) == 0 { return None; }
+                GdiFlush();
+            }
+            let sum = super::screen_sum(self.full.px());
+            Some(match pointer(d).filter(|_| with_pointer) {
+                Some((x, y, c)) => sum ^ ((x as u64) << 40 | (y as u64) << 16 | 1).wrapping_mul(c as u64 | 1),
+                None => sum,
+            })
+        }
+        /// The display that was just looked at, no wider than asked, the pointer drawn where it is: its pixels and its size.
+        pub fn picture(&mut self, d: &Display, width: u32, with_pointer: bool) -> Option<(&[u8], u16, u16)> {
+            if self.full.w != d.w || self.full.h != d.h { return None; }
+            let w = (width.min(3840) as i32).min(d.w).max(16);
+            let h = ((d.h as i64 * w as i64) / d.w as i64).clamp(1, 16000) as i32;
+            unsafe {
+                if !self.small.fit(self.desk, w, h) { return None; }
+                // (4: every pixel of the picture is the average of the ones it stands for, which keeps text readable)
+                SetStretchBltMode(self.small.dc, 4);
+                SetBrushOrgEx(self.small.dc, 0, 0, std::ptr::null_mut());
+                if StretchBlt(self.small.dc, 0, 0, w, h, self.full.dc, 0, 0, d.w, d.h, COPY) == 0 { return None; }
+                if let Some((x, y, cursor)) = pointer(d).filter(|_| with_pointer) {
+                    let mut info = IconInfo { icon: 0, hot_x: 0, hot_y: 0, mask: 0, color: 0 };
+                    if GetIconInfo(cursor, &mut info) != 0 {
+                        if info.mask != 0 { DeleteObject(info.mask); }
+                        if info.color != 0 { DeleteObject(info.color); }
+                    }
+                    let at = |v: i32, hot: u32| (v as i64 * w as i64 / d.w as i64) as i32 - hot as i32;
+                    DrawIconEx(self.small.dc, at(x, info.hot_x), at(y, info.hot_y), cursor, 0, 0, 0, 0, 3);
+                }
+                GdiFlush();
+            }
+            Some((self.small.px(), w as u16, h as u16))
+        }
+    }
+    impl Drop for Grab {
+        fn drop(&mut self) { unsafe { self.full.free(); self.small.free(); ReleaseDC(0, self.desk); } }
+    }
+}
+/// One thing a device asked of the pointer or the keys, done if it may and is looking at one display: the pointer to a place
+/// on that display (`at`, as parts of its width and height) or moved by an amount (`move`, in the display's pixels), a button
+/// down or up, a click, the wheel, a key with the keys held beside it, or text. Says whether anything was done.
+#[cfg(windows)]
+fn screen_input(w: &Watch, m: &Value) -> bool {
+    use std::sync::atomic::Ordering;
+    if !w.control.load(Ordering::Relaxed) || w.stop.load(Ordering::Relaxed) { return false; }
+    let Some(d) = w.shown.lock().ok().and_then(|s| *s) else { return false };
+    let f = |k: &str| m[k].as_f64().filter(|v| v.is_finite());
+    let button = match m["b"].as_u64() { Some(1) => 1u8, Some(2) => 2, _ => 0 };
+    let to = |x: f64, y: f64| screen::point_to(d.x + (x.clamp(0.0, 1.0) * (d.w - 1) as f64).round() as i32, d.y + (y.clamp(0.0, 1.0) * (d.h - 1) as f64).round() as i32);
+    let was = screen::aware();
+    let did = match m["what"].as_str().unwrap_or("") {
+        "at" => match (f("x"), f("y")) { (Some(x), Some(y)) => { to(x, y); true } _ => false },
+        "move" => match (f("dx"), f("dy")) { (Some(dx), Some(dy)) => { screen::point_by(dx.clamp(-8000.0, 8000.0).round() as i32, dy.clamp(-8000.0, 8000.0).round() as i32, &d); true } _ => false },
+        "btn" => {
+            let down = m["down"].as_bool().unwrap_or(false);
+            screen::button(button, down);
+            if down { w.held.fetch_or(1 << button, Ordering::Relaxed); } else { w.held.fetch_and(!(1 << button), Ordering::Relaxed); }
+            true
+        }
+        "click" => {
+            if let (Some(x), Some(y)) = (f("x"), f("y")) { to(x, y); }
+            for _ in 0..m["n"].as_u64().unwrap_or(1).clamp(1, 3) { screen::button(button, true); screen::button(button, false); }
+            true
+        }
+        "wheel" => { screen::wheel(f("dx").unwrap_or(0.0).clamp(-2400.0, 2400.0) as i32, f("dy").unwrap_or(0.0).clamp(-2400.0, 2400.0) as i32); true }
+        "key" => match screen_vk(m["k"].as_str().unwrap_or("")) {
+            Some((vk, beside)) => {
+                let held: Vec<(u16, bool)> = m["mods"].as_array().map(|a| a.iter().filter_map(|n| n.as_str().filter(|n| matches!(*n, "ctrl" | "alt" | "shift" | "win")).and_then(screen_vk)).take(4).collect()).unwrap_or_default();
+                for (k, b) in &held { screen::press(*k, *b, true); }
+                screen::press(vk, beside, true);
+                screen::press(vk, beside, false);
+                for (k, b) in held.iter().rev() { screen::press(*k, *b, false); }
+                true
+            }
+            None => false,
+        },
+        "text" => { let t: String = m["t"].as_str().unwrap_or("").chars().take(2000).collect(); screen::type_text(&t); !t.is_empty() }
+        _ => false,
+    };
+    screen::unaware(was);
+    did
+}
+#[cfg(not(windows))]
+fn screen_input(_: &Watch, _: &Value) -> bool { false }
+/// The buttons a device was holding down come up: it stopped looking, lost the connection, or may no longer use them.
+fn screen_let_go(w: &Watch) {
+    let held = w.held.swap(0, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(windows)]
+    for b in 0..3u8 { if held & (1 << b) != 0 { screen::button(b, false); } }
+    #[cfg(not(windows))]
+    let _ = held;
+}
+/// The name a paired device was given, for what is written down about it.
+fn device_name(device: &str) -> String {
+    config()["remote"]["devices"].as_array().and_then(|a| a.iter().find(|d| d["id"] == device).and_then(|d| d["name"].as_str().map(|n| n.to_string()))).unwrap_or_else(|| "A device".into())
+}
+/// Show a paired device the screens until told to stop, or until it is no longer allowed: which displays there are, then
+/// pictures of all of them (small, about one a second each) or of the one that was picked (as often as it changes).
+fn screen_watch(w: std::sync::Arc<Watch>, device: String, tx: std::sync::mpsc::Sender<String>, frames: std::sync::mpsc::SyncSender<Vec<u8>>) {
+    if !device_may_now(&device, "screens") || !cfg!(windows) {
+        let _ = tx.send(screens_say(false, false, &[]).to_string());
+        return w.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let name = device_name(&device);
+    if let Ok(mut live) = SCREEN_LIVE.lock() { live.push(device.clone()); }
+    remote_tell("is looking at the screens", &name, None);
+    #[cfg(windows)]
+    screen_show(&w, &device, &tx, &frames);
+    #[cfg(not(windows))]
+    let _ = (&w, &frames);
+    if let Ok(mut live) = SCREEN_LIVE.lock() { if let Some(at) = live.iter().position(|d| *d == device) { live.remove(at); } }
+    w.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    // a button this device was still holding down is let go, and it is no longer using the pointer
+    screen_let_go(&w);
+    if w.used.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Ok(mut using) = SCREEN_USING.lock() { if let Some(at) = using.iter().position(|d| *d == device) { using.remove(at); } }
+    }
+    remote_tell("no longer looks at the screens", &name, None);
+}
+#[cfg(windows)]
+fn screen_show(w: &Watch, device: &str, tx: &std::sync::mpsc::Sender<String>, frames: &std::sync::mpsc::SyncSender<Vec<u8>>) {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+    screen::aware();
+    let Some(mut grab) = screen::Grab::new() else { let _ = tx.send(json!({ "op": "err", "text": "the screens could not be looked at" }).to_string()); return };
+    let gone = || w.stop.load(Ordering::Relaxed);
+    let asked = || (w.pick.lock().map(|p| p.clone()).unwrap_or_default(), w.width.load(Ordering::Relaxed));
+    let (mut list, mut said, mut checked): (Vec<Display>, String, Option<Instant>) = (vec![], String::new(), None);
+    // whether this device may use the pointer and the keys, and where the pointer was when the device was last told
+    let (mut control, mut pointed): (bool, Option<(i32, i32)>) = (false, None);
+    // of each display: what it added up to when it was last sent, and the pixels the device has of it
+    let (mut last, mut has, mut was, mut n): (Vec<u64>, Vec<Vec<u8>>, (String, u32), u64) = (vec![], vec![], (String::new(), 0), 0);
+    while !gone() {
+        // every two seconds: is this device still allowed, and are the displays still the same ones
+        if checked.map(|c| c.elapsed() > Duration::from_secs(2)).unwrap_or(true) {
+            checked = Some(Instant::now());
+            let allowed = device_may_now(device, "screens");
+            control = allowed && device_may_now(device, "control");
+            if !control { w.control.store(false, Ordering::Relaxed); screen_let_go(w); }
+            list = if allowed { screen::displays() } else { vec![] };
+            let now = screens_say(allowed, control, &list).to_string();
+            if now != said { said = now.clone(); last.clear(); has.clear(); if tx.send(now).is_err() { return; } }
+            if !allowed { return; }
+        }
+        let now = asked();
+        if now != was || w.fresh.swap(false, Ordering::Relaxed) { was = now; last.clear(); has.clear(); }
+        last.resize(list.len(), 0);
+        has.resize(list.len(), vec![]);
+        let one = was.0.parse::<usize>().ok().filter(|i| *i < list.len());
+        // the pointer and the keys are used on the one display that is looked at: with all of them small, on none
+        if let Ok(mut shown) = w.shown.lock() { *shown = one.map(|i| list[i]); }
+        w.control.store(control && one.is_some(), Ordering::Relaxed);
+        if let Some(d) = one.map(|i| &list[i]).filter(|_| control) {
+            let at = screen::pointer_at(d);
+            if at != pointed { pointed = at; if let Some((x, y)) = at { if tx.send(json!({ "op": "ptr", "x": x, "y": y }).to_string()).is_err() { return; } } }
+        }
+        let mut sent_one = false;
+        for (i, d) in list.iter().enumerate().filter(|(i, _)| one.map(|o| o == *i).unwrap_or(true)) {
+            if gone() || asked() != was { break; }
+            let Some(sum) = grab.look(d, one.is_some()) else { continue };
+            if sum == last[i] { continue; }
+            let Some((px, pw, ph)) = grab.picture(d, was.1, one.is_some()) else { continue };
+            let parts = screen_changed(&has[i], px, pw, ph);
+            // (a change too slight to show at this size)
+            if parts.is_empty() { last[i] = sum; continue; }
+            let mut m = screen_head(i, parts.len(), n + 1, pw, ph).to_vec();
+            let mut whole = true;
+            for p in &parts {
+                let all = *p == (0, 0, pw, ph);
+                let cut = if all { vec![] } else { screen_cut(px, pw, *p) };
+                let Some(jpeg) = screen_jpeg(if all { px } else { &cut }, p.2, p.3, one.is_some()) else { whole = false; break };
+                for v in [p.0, p.1, p.2, p.3] { m.extend_from_slice(&v.to_le_bytes()); }
+                m.extend_from_slice(&(jpeg.len() as u32).to_le_bytes());
+                m.extend_from_slice(&jpeg);
+            }
+            if !whole { continue; }
+            match frames.try_send(m) {
+                Ok(()) => {}
+                // the device has not taken the last ones yet: this one is not sent, and the display is looked at again later
+                Err(std::sync::mpsc::TrySendError::Full(_)) => { std::thread::sleep(Duration::from_millis(100)); continue; }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return,
+            }
+            (last[i], n) = (sum, n + 1);
+            has[i].clear();
+            has[i].extend_from_slice(px);
+            sent_one = one.is_some();
+            // the next one is made once this one was shown, or has had its time
+            let sent = Instant::now();
+            while w.seen.load(Ordering::Relaxed) < n && sent.elapsed() < Duration::from_millis(1500) && !gone() { std::thread::sleep(Duration::from_millis(4)); }
+        }
+        // one display that is changing is looked at again at once (waiting for the picture to be shown was the pause);
+        // one that is still, sixteen times a second; all of them small, once a second
+        if sent_one { continue; }
+        let till = Instant::now() + Duration::from_millis(if one.is_some() { 60 } else { 1000 });
+        while Instant::now() < till && !gone() && asked() == was { std::thread::sleep(Duration::from_millis(20)); }
+    }
+}
 /// One thing a paired page asked for. Answers and what the sessions print go back through `tx`.
-fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, terms: &TermMap, watching: &Watching) {
+fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, frames: &std::sync::mpsc::SyncSender<Vec<u8>>, terms: &TermMap, watching: &Watching) {
     let Ok(m) = serde_json::from_str::<Value>(text) else { return };
     let s = |k: &str| m[k].as_str().unwrap_or("").to_string();
     let n = |k: &str, d: u64| m[k].as_u64().unwrap_or(d).min(500) as u16;
     let say = |v: Value| { let _ = tx.send(v.to_string()); };
     let op = s("op");
+    // a device that may only watch: nothing is typed, started, ended or switched from it
+    if matches!(op.as_str(), "open" | "new" | "in" | "size" | "say" | "end" | "dark" | "input") && !device_may_now(device, "type") {
+        if !matches!(op.as_str(), "in" | "size" | "input") { say(json!({ "op": "err", "id": m["id"], "text": "This device may only watch. That is changed at the computer, on the Remote access screen." })); }
+        return;
+    }
     match op.as_str() {
         "list" => {
             let tx = tx.clone();
@@ -2949,10 +3582,44 @@ fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, ter
             }
             if let Some(w) = held.take() { w.stop.store(true, Ordering::Relaxed); }
             if !ours(&name) { return; }
-            let w = std::sync::Arc::new(Watch { name, stop: Default::default(), seen: Default::default(), pick: Mutex::new(s("page")) });
+            let w = std::sync::Arc::new(Watch { name, pick: Mutex::new(s("page")), ..Default::default() });
             *held = Some(w.clone());
             let (tx, width) = (tx.clone(), m["width"].as_u64().unwrap_or(1200).clamp(320, 2000) as u32);
             std::thread::spawn(move || browser_watch(width, w, tx));
+        }
+        // see the computer's own screens: all of them small, one of them large, at another width, or no longer
+        "screen" => {
+            use std::sync::atomic::Ordering;
+            let Ok(mut held) = watching.lock() else { return };
+            // (a watch that ended by itself, the device not being allowed, is not one to hand a new wish to)
+            let mine = held.as_ref().map(|w| w.name == SCREENS && !w.stop.load(Ordering::Relaxed)).unwrap_or(false);
+            if m["off"].as_bool().unwrap_or(false) {
+                if mine { if let Some(w) = held.take() { w.stop.store(true, Ordering::Relaxed); } }
+                return;
+            }
+            let (pick, width) = (s("pick"), m["width"].as_u64().unwrap_or(1200).clamp(160, 3840) as u32);
+            if let Some(w) = held.as_ref().filter(|_| mine) {
+                if let Ok(mut p) = w.pick.lock() { *p = pick; }
+                w.width.store(width, Ordering::Relaxed);
+                // (the page lost what it had of a display: the whole of it is sent again, not what changed)
+                if m["fresh"].as_bool().unwrap_or(false) { w.fresh.store(true, Ordering::Relaxed); }
+                return;
+            }
+            if let Some(w) = held.take() { w.stop.store(true, Ordering::Relaxed); }
+            let w = std::sync::Arc::new(Watch { name: SCREENS.into(), pick: Mutex::new(pick), width: width.into(), ..Default::default() });
+            *held = Some(w.clone());
+            let (tx, frames, device) = (tx.clone(), frames.clone(), device.to_string());
+            std::thread::spawn(move || screen_watch(w, device, tx, frames));
+        }
+        // the pointer and the keys of the computer, on the display this device is looking at
+        "input" => {
+            use std::sync::atomic::Ordering;
+            let Some(w) = watching.lock().ok().and_then(|h| h.clone()).filter(|w| w.name == SCREENS) else { return };
+            if screen_input(&w, &m) && !w.used.swap(true, Ordering::Relaxed) {
+                if let Ok(mut using) = SCREEN_USING.lock() { using.push(device.to_string()); }
+                let device = device.to_string();
+                std::thread::spawn(move || remote_tell("is using the pointer and the keys", &device_name(&device), None));
+            }
         }
         "dark" => {
             let (tx, on) = (tx.clone(), m["on"].as_bool().unwrap_or(false));
@@ -3096,10 +3763,12 @@ fn remote_state() -> Value {
     let port = REMOTE.lock().ok().and_then(|r| r.as_ref().map(|r| r.port));
     let ip = tailscale_ip();
     let live: Vec<String> = REMOTE_LIVE.lock().map(|l| l.iter().map(|x| x.device.clone()).collect()).unwrap_or_default();
+    let looking: Vec<String> = SCREEN_LIVE.lock().map(|l| l.clone()).unwrap_or_default();
+    let using: Vec<String> = SCREEN_USING.lock().map(|l| l.clone()).unwrap_or_default();
     let now = now_secs();
     let devices: Vec<Value> = c["remote"]["devices"].as_array().map(|a| a.iter().map(|d| {
         let id = d["id"].as_str().unwrap_or("");
-        json!({ "id": id, "name": d["name"], "added": d["added"], "seen": d["seen"], "live": live.iter().filter(|x| x.as_str() == id).count(), "expired": now.saturating_sub(d["seen"].as_u64().unwrap_or(0)) >= DEVICE_IDLE_SECS })
+        json!({ "id": id, "name": d["name"], "added": d["added"], "seen": d["seen"], "live": live.iter().filter(|x| x.as_str() == id).count(), "type": device_may(&c["remote"]["devices"], id, "type", now), "screens": device_may(&c["remote"]["devices"], id, "screens", now), "screensUntil": d["screensUntil"].as_u64().unwrap_or(0), "control": device_may(&c["remote"]["devices"], id, "control", now), "controlUntil": d["controlUntil"].as_u64().unwrap_or(0), "looking": looking.iter().any(|x| x.as_str() == id), "using": using.iter().any(|x| x.as_str() == id), "expired": now.saturating_sub(d["seen"].as_u64().unwrap_or(0)) >= DEVICE_IDLE_SECS })
     }).collect()).unwrap_or_default();
     let code = REMOTE_PAIR.lock().ok().and_then(|p| p.as_ref().filter(|(_, at)| at.elapsed().as_secs() < PAIR_SECS).map(|(c, at)| (c.clone(), PAIR_SECS - at.elapsed().as_secs())));
     let (secure_name, secure_on) = port.map(|p| remote_secure_state(p, false)).unwrap_or_default();
@@ -3108,7 +3777,7 @@ fn remote_state() -> Value {
         _ => Value::Null,
     };
     let firewall = port.and_then(remote_firewall);
-    json!({ "on": c["remote"]["on"].as_bool().unwrap_or(false), "running": port.is_some(), "port": port.unwrap_or(REMOTE_PORT), "tailscale": ip.is_some(), "firewall": firewall, "devices": devices, "pair": pair, "secure": { "on": secure_on, "name": secure_name } })
+    json!({ "on": c["remote"]["on"].as_bool().unwrap_or(false), "running": port.is_some(), "port": port.unwrap_or(REMOTE_PORT), "tailscale": ip.is_some(), "firewall": firewall, "devices": devices, "pair": pair, "secure": { "on": secure_on, "name": secure_name, "only": c["remote"]["secureOnly"].as_bool().unwrap_or(false) } })
 }
 /// Turn the secure address on or off: ask Tailscale to answer https://<this machine's name> and hand it to Maestro. The first
 /// time, Tailscale wants this allowed for your network and prints where to do that: that text is given back as `note`.
@@ -3152,6 +3821,44 @@ fn remote_set(on: bool) -> Result<Value, String> {
 fn remote_pair() -> Result<Value, String> {
     if REMOTE.lock().map_err(|e| e.to_string())?.is_none() { return Err("turn remote access on first".into()); }
     remote_pair_code()?;
+    Ok(remote_state())
+}
+/// Give one paired device something it may do, or take it back: "type" (into sessions; given unless taken away), "screens"
+/// (see the displays) or "control" (the pointer and the keys on them). The last two are given for so many hours, or with
+/// none until they are taken back. The pointer and the keys bring the screens with them, and go when the screens go. What
+/// is taken back holds within two seconds for a device that is using it.
+#[tauri::command(async)]
+fn remote_permit(id: String, what: String, on: bool, hours: Option<u64>) -> Result<Value, String> {
+    if !matches!(what.as_str(), "type" | "screens" | "control") { return Err("that is not something a device is given".into()); }
+    let name = {
+        let _one = REMOTE_CONFIG.lock().map_err(|e| e.to_string())?;
+        let mut c = config();
+        let now = now_secs();
+        let d = c["remote"]["devices"].as_array_mut().and_then(|a| a.iter_mut().find(|d| d["id"] == id.as_str())).ok_or("that device is not paired")?;
+        let until = json!(hours.filter(|h| *h > 0 && on).map(|h| now + h.min(24 * 30) * 3600).unwrap_or(0));
+        d[what.as_str()] = json!(on);
+        if what != "type" { d[format!("{what}Until").as_str()] = until.clone(); }
+        if what == "control" && on && !device_may(&json!([d.clone()]), &id, "screens", now) { d["screens"] = json!(true); d["screensUntil"] = until; }
+        if what == "screens" && !on { d["control"] = json!(false); d["controlUntil"] = json!(0); }
+        let name = d["name"].as_str().unwrap_or("A device").to_string();
+        save_config(&c)?;
+        name
+    };
+    if let Ok(mut seen) = DEVICE_MAY.lock() { seen.clear(); }
+    let thing = match what.as_str() { "type" => "type into sessions", "screens" => "see the screens", _ => "use the pointer and the keys" };
+    remote_tell(&format!("{} {thing}{}", if on { "may" } else { "may no longer" }, hours.filter(|h| *h > 0 && on).map(|h| format!(" for {h} h")).unwrap_or_default()), &name, None);
+    Ok(remote_state())
+}
+/// Answer other devices at the secure address only (the plain one sends them on), or at both again.
+#[tauri::command(async)]
+fn remote_secure_only(on: bool) -> Result<Value, String> {
+    {
+        let _one = REMOTE_CONFIG.lock().map_err(|e| e.to_string())?;
+        let mut c = config();
+        if !c["remote"].is_object() { c["remote"] = json!({}); }
+        c["remote"]["secureOnly"] = json!(on);
+        save_config(&c)?;
+    }
     Ok(remote_state())
 }
 /// Remove one paired device (or, with no id, all of them): its token stops working and its connections are cut now.
@@ -3270,7 +3977,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            blackout, blackout_end, blackout_dim, load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_allow, remote_secure,
+            blackout, blackout_end, blackout_dim, load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_permit, remote_secure_only, remote_allow, remote_secure,
         ])
         .run(tauri::generate_context!())
         .expect("Maestro could not start");
@@ -3549,12 +4256,15 @@ mod tests {
         assert_eq!(token_hash("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         let token = "0123456789abcdef0123456789abcdef";
         let devices = json!([{ "id": "aa", "name": "Phone", "hash": token_hash(token), "seen": 1_000_000 }, { "id": "bb", "name": "Laptop", "hash": token_hash("ffffffffffffffffffffffffffffffff"), "seen": 1_000_000 }]);
-        assert_eq!(device_of(&devices, token, 1_000_500), Some(("aa".into(), "Phone".into())));
-        assert_eq!(device_of(&devices, "0123456789abcdef0123456789abcdee", 1_000_500), None);
-        assert_eq!(device_of(&devices, &token_hash(token), 1_000_500), None); // the hash in the file is not a way in
-        assert_eq!(device_of(&devices, token, 1_000_000 + DEVICE_IDLE_SECS), None);
-        assert_eq!(device_of(&devices, "", 1_000_500), None);
-        assert_eq!(device_of(&json!(null), token, 1_000_500), None);
+        let mut devices = devices;
+        let none = || -> Option<String> { None };
+        let who = |d: &mut Value, t: &str, now: u64| device_turn(d, t, now, &none).0;
+        assert_eq!(who(&mut devices, token, 1_000_500), Known::Yes("aa".into(), "Phone".into(), None));
+        assert_eq!(who(&mut devices, "0123456789abcdef0123456789abcdee", 1_000_500), Known::No);
+        assert_eq!(who(&mut devices, &token_hash(token), 1_000_500), Known::No); // the hash in the file is not a way in
+        assert_eq!(who(&mut devices, token, 1_000_000 + DEVICE_IDLE_SECS), Known::No);
+        assert_eq!(who(&mut devices, "", 1_000_500), Known::No);
+        assert_eq!(who(&mut json!(null), token, 1_000_500), Known::No);
         assert_eq!(tailnet_ip_in("100.121.112.23\r\n"), Some("100.121.112.23".parse().unwrap()));
         assert_eq!(tailnet_ip_in("Tailscale is stopped.\n"), None);
         assert_eq!(tailnet_ip_in("192.168.0.6\n"), None);
@@ -3724,5 +4434,203 @@ mod tests {
         assert!(safe("../x.md").is_err());
         assert!(safe("a/b.md").is_err());
         assert!(safe("x.txt").is_err());
+    }
+    #[test]
+    fn the_screens_are_for_a_device_that_was_allowed_them() {
+        let devices = json!([{ "id": "aa", "name": "Phone" }, { "id": "bb", "name": "Tablet", "screens": true }, { "id": "cc", "screens": false }, { "id": "dd", "screens": "yes" },
+            { "id": "ee", "screens": true, "screensUntil": 2000, "control": true, "controlUntil": 1500 }, { "id": "ff", "control": true, "type": false }, { "id": "gg", "screens": true, "screensUntil": 0, "control": true }]);
+        let may = |id: &str, what: &str, now: u64| device_may(&devices, id, what, now);
+        assert!(!may("aa", "screens", 1000)); // not until it is said at the computer
+        assert!(may("bb", "screens", 1000) && !may("bb", "control", 1000));
+        assert!(!may("cc", "screens", 1000) && !may("dd", "screens", 1000) && !may("zz", "screens", 1000));
+        assert!(!device_may(&json!(null), "bb", "screens", 1000));
+        // given for a time: the pointer and the keys run out first here, then the screens
+        assert!(may("ee", "screens", 1499) && may("ee", "control", 1499));
+        assert!(may("ee", "screens", 1500) && !may("ee", "control", 1500));
+        assert!(!may("ee", "screens", 2000) && !may("ee", "control", 2000));
+        // the pointer and the keys are not had without the screens; "until taken back" has no end
+        assert!(!may("ff", "control", 1000));
+        assert!(may("gg", "control", u64::MAX));
+        // typing into sessions is had unless it was taken away; a device that is not paired has nothing
+        assert!(may("aa", "type", 1000) && !may("ff", "type", 1000) && !may("zz", "type", 1000) && !may("aa", "anything", 1000));
+        let said = screens_say(true, false, &[Display { x: 0, y: 0, w: 2560, h: 1440, main: true }, Display { x: -1920, y: 180, w: 1920, h: 1080, main: false }]);
+        assert_eq!(said["items"][1], json!({ "i": 1, "x": -1920, "y": 180, "w": 1920, "h": 1080, "main": false }));
+        assert_eq!(said["allowed"], true);
+        assert_eq!((&said["control"], &screens_say(true, true, &[])["control"]), (&json!(false), &json!(true)));
+        assert_eq!(screens_say(false, false, &[])["items"], json!([]));
+    }
+    #[test]
+    fn a_picture_says_what_it_is_of_and_a_display_that_changed_adds_up_differently() {
+        assert_eq!(screen_head(1, 3, 0x0102_0304, 2560, 1440), [b'S', 1, 3, 0, 4, 3, 2, 1, 0x00, 0x0A, 0xA0, 0x05]);
+        let mut px = vec![0x20u8; 64 * 64 * 4];
+        let before = screen_sum(&px);
+        assert_eq!(before, screen_sum(&px));
+        // one pixel, one shade lighter, anywhere: the first, one in the middle, the last
+        for at in [0, 64 * 32 * 4 + 6, px.len() - 2] {
+            px[at] += 1;
+            assert_ne!(screen_sum(&px), before);
+            px[at] -= 1;
+        }
+        // and two changes that are each other's opposite do not cancel
+        (px[2], px[10]) = (0x21, 0x1F);
+        assert_ne!(screen_sum(&px), before);
+    }
+    #[test]
+    fn a_token_is_replaced_and_a_replaced_one_that_comes_back_ends_the_pairing() {
+        let (t1, t2, t3) = ("11111111111111111111111111111111", "22222222222222222222222222222222", "33333333333333333333333333333333");
+        let mut devices = json!([{ "id": "aa", "name": "Phone", "hash": token_hash(t1), "added": 1_000_000, "seen": 1_000_000 }]);
+        let (next2, next3, none) = (|| Some(t2.to_string()), || Some(t3.to_string()), || -> Option<String> { None });
+        let yes = |next: Option<&str>| Known::Yes("aa".into(), "Phone".into(), next.map(|t| t.to_string()));
+        // younger than a day: it stays
+        assert_eq!(device_turn(&mut devices, t1, 1_000_000 + TOKEN_SECS - 1, &next2), (yes(None), false));
+        // a day old: the device is handed the next one, and the one it gave still works until that has been used
+        assert_eq!(device_turn(&mut devices, t1, 1_000_000 + TOKEN_SECS, &next2), (yes(Some(t2)), true));
+        let then = 1_000_000 + TOKEN_SECS;
+        assert_eq!(device_turn(&mut devices, t1, then + 10, &next3), (yes(None), false));
+        // the next one never arrived: after a while another is made, and the one that was lost on the way is worth nothing
+        assert_eq!(device_turn(&mut devices, t1, then + 300, &next3), (yes(Some(t3)), true));
+        assert_eq!(device_turn(&mut devices, t2, then + 301, &none).0, Known::No);
+        // the device uses its new token: the one before it is retired
+        assert_eq!(device_turn(&mut devices, t3, then + 400, &none), (yes(None), true));
+        assert_eq!(device_turn(&mut devices, t3, then + 401, &none), (yes(None), false));
+        assert!(devices[0]["prev"].is_null() && devices[0]["old"] == token_hash(t1).as_str());
+        // and whoever shows the retired one holds a copy: that ends the pairing, whatever the time
+        assert_eq!(device_turn(&mut devices, t1, then + 402, &next2), (Known::Reused("aa".into(), "Phone".into()), false));
+        assert_eq!(device_turn(&mut devices, t1, then + DEVICE_IDLE_SECS * 2, &next2).0, Known::Reused("aa".into(), "Phone".into()));
+        // no random numbers to be had: the token it has goes on working
+        let mut devices = json!([{ "id": "aa", "name": "Phone", "hash": token_hash(t1), "added": 0, "seen": 1_000_000 }]);
+        assert_eq!(device_turn(&mut devices, t1, 1_000_500, &none), (yes(None), false));
+    }
+    #[test]
+    fn the_plain_address_sends_other_devices_on_when_only_the_secure_one_answers() {
+        assert!(secure_only(true, false));
+        assert!(!secure_only(true, true)); // this machine itself, and what Tailscale hands on from the secure address
+        assert!(!secure_only(false, false) && !secure_only(false, true));
+    }
+    #[test]
+    fn a_key_is_known_by_its_name() {
+        assert_eq!(screen_vk("enter"), Some((0x0D, false)));
+        assert_eq!(screen_vk("left"), Some((0x25, true)));
+        assert_eq!((screen_vk("f1"), screen_vk("f12"), screen_vk("f13"), screen_vk("f0"), screen_vk("f")), (Some((0x70, false)), Some((0x7B, false)), None, None, Some((0x46, false))));
+        assert_eq!((screen_vk("c"), screen_vk("C"), screen_vk("7")), (Some((0x43, false)), Some((0x43, false)), Some((0x37, false))));
+        assert_eq!((screen_vk(""), screen_vk("é"), screen_vk("/"), screen_vk("power")), (None, None, None, None));
+        #[cfg(all(windows, target_pointer_width = "64"))]
+        assert_eq!(screen::input_sizes(), (screen::INPUT_SIZE, screen::INPUT_SIZE));
+    }
+    #[test]
+    fn only_the_parts_of_a_display_that_changed_are_sent() {
+        // 200 by 150: four squares across (the last 8 wide), three down (the last 22 high)
+        let (w, h) = (200u16, 150u16);
+        let old = vec![0x40u8; 200 * 150 * 4];
+        let dot = |px: &mut Vec<u8>, x: usize, y: usize| px[(y * 200 + x) * 4 + 1] ^= 0xFF;
+        assert_eq!(screen_changed(&[], &old, w, h), vec![(0, 0, 200, 150)]); // nothing to compare with: all of it
+        assert_eq!(screen_changed(&old[4..], &old, w, h), vec![(0, 0, 200, 150)]); // another size: all of it
+        assert_eq!(screen_changed(&old, &old, w, h), vec![]);
+        assert_eq!(screen_changed(&old, &old[4..], w, h), vec![]); // not a picture of that size at all
+        let mut new = old.clone();
+        dot(&mut new, 70, 10);
+        assert_eq!(screen_changed(&old, &new, w, h), vec![(64, 0, 64, 64)]);
+        // the square beside it and the two under them: one part, not four
+        dot(&mut new, 130, 63);
+        dot(&mut new, 64, 64);
+        dot(&mut new, 191, 127);
+        assert_eq!(screen_changed(&old, &new, w, h), vec![(64, 0, 128, 128)]);
+        // the last pixel of the display, in the corner square that is smaller than the others: a part of its own
+        let mut new = old.clone();
+        dot(&mut new, 70, 10);
+        dot(&mut new, 199, 149);
+        assert_eq!(screen_changed(&old, &new, w, h), vec![(64, 0, 64, 64), (192, 128, 8, 22)]);
+        assert_eq!(screen_cut(&new, w, (192, 128, 8, 22)).len(), 8 * 22 * 4);
+        assert_eq!(screen_cut(&new, w, (192, 128, 8, 22))[(21 * 8 + 7) * 4 + 1], 0x40 ^ 0xFF);
+        assert_eq!(screen_cut(&new, w, (64, 0, 64, 64))[(10 * 64 + 6) * 4 + 1], 0x40 ^ 0xFF);
+        // most of the display: one part around all of it
+        let mut new = old.clone();
+        for (x, y) in [(0, 0), (70, 0), (130, 0), (195, 0), (0, 70), (70, 70), (130, 70), (0, 140)] { dot(&mut new, x, y); }
+        assert_eq!(screen_changed(&old, &new, w, h), vec![(0, 0, 200, 150)]);
+    }
+    #[test]
+    fn the_page_may_run_its_own_script_and_no_other() {
+        let hash = |t: &str| { use base64::Engine; use sha2::Digest; base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(t.as_bytes())) };
+        assert_eq!(remote_scripts(b"<p>no script</p>"), "'self'");
+        assert_eq!(remote_scripts(b"<script src=\"a.js\"></script><script>let a = 1;</script>"), format!("'self' 'sha256-{}'", hash("let a = 1;")));
+        // a browser reads every line ending as a line feed before it adds the script up
+        assert_eq!(remote_scripts(b"<script>\r\nlet a = 1;\r\n</script>"), format!("'self' 'sha256-{}'", hash("\nlet a = 1;\n")));
+        assert_eq!(remote_scripts(b"<script>a</script><script>b</script>"), format!("'self' 'sha256-{}' 'sha256-{}'", hash("a"), hash("b")));
+        // the page that is served: one script of its own, and nothing left that allows any other
+        let served = remote_scripts(REMOTE_PAGE.as_bytes());
+        assert_eq!(served.matches("'sha256-").count(), 1);
+        assert!(!served.contains("unsafe"));
+        assert!(!REMOTE_PAGE.contains(" onclick=") && !REMOTE_PAGE.contains("javascript:"));
+    }
+    /// The pointer and a key of the machine the tests run on, where it has a desktop that takes them: the pointer is moved
+    /// three pixels and put back, and a key no keyboard has (F24) goes down and comes up. Nothing is clicked or typed.
+    /// Somebody may be at that machine with a hand on the mouse: the pointer is tried while it lies still, and a try that
+    /// was disturbed is made again.
+    #[cfg(windows)]
+    #[test]
+    fn the_pointer_goes_where_it_is_sent_and_a_key_goes_down_and_up() {
+        let was = screen::aware();
+        let settle = |ms: u64| std::thread::sleep(std::time::Duration::from_millis(ms));
+        let try_once = || -> Option<bool> {
+            let (x, y) = screen::pointer_now()?;
+            settle(80);
+            if screen::pointer_now() != Some((x, y)) { return Some(false); } // it is being moved
+            let d = screen::displays().into_iter().find(|d| x >= d.x && y >= d.y && x < d.x + d.w && y < d.y + d.h)?;
+            if !screen::point_to(x, y) { return None; } // no desktop here that takes them
+            settle(15);
+            let stayed = screen::pointer_now();
+            let step = if x + 3 < d.x + d.w { 3 } else { -3 };
+            screen::point_by(step, 0, &d);
+            settle(15);
+            let moved = screen::pointer_now();
+            // moved by more than the display is wide, it stops at the display's edge
+            screen::point_by(-100_000, 0, &d);
+            settle(15);
+            let edge = screen::pointer_now();
+            screen::point_to(x, y);
+            settle(15);
+            Some((stayed, moved, edge, screen::pointer_now()) == (Some((x, y)), Some((x + step, y)), Some((d.x, y)), Some((x, y))))
+        };
+        let mut right = None;
+        for _ in 0..12 {
+            match try_once() { None => break, Some(true) => { right = Some(true); break; } Some(false) => { right = Some(false); settle(250); } }
+        }
+        assert_ne!(right, Some(false), "the pointer did not go where it was sent, in twelve tries");
+        if screen::press(0x87, false, true) {
+            settle(30);
+            let down = screen::is_down(0x87);
+            assert!(screen::press(0x87, false, false));
+            settle(30);
+            assert_eq!((down, screen::is_down(0x87)), (true, false));
+        }
+        screen::unaware(was);
+    }
+    /// The displays of the machine the tests run on, where there are any to look at: each is copied, made smaller and
+    /// encoded. (`MAESTRO_SHOT` names a folder to leave the pictures in, to look at them.)
+    #[cfg(windows)]
+    #[test]
+    fn a_display_becomes_a_picture() {
+        screen::aware();
+        let Some(mut grab) = screen::Grab::new() else { return };
+        for (i, d) in screen::displays().iter().enumerate() {
+            let Some(sum) = grab.look(d, true) else { continue };
+            let Some((px, w, h)) = grab.picture(d, 1200, true) else { panic!("display {i} was copied but not made smaller") };
+            assert_eq!((w as i32, px.len()), (d.w.min(1200), w as usize * h as usize * 4));
+            assert!((h as i32 - d.h * w as i32 / d.w).abs() <= 1);
+            let jpeg = screen_jpeg(px, w, h, true).expect("the picture is encoded");
+            assert!(jpeg.starts_with(&[0xFF, 0xD8]) && jpeg.ends_with(&[0xFF, 0xD9]));
+            assert!(screen_jpeg(&px[4..], w, h, true).is_none());
+            if let Ok(dir) = std::env::var("MAESTRO_SHOT") {
+                let small = grab.picture(d, 480, false).and_then(|(px, w, h)| screen_jpeg(px, w, h, false)).expect("the small one too");
+                fs::write(Path::new(&dir).join(format!("display-{i}.jpg")), &jpeg).unwrap();
+                fs::write(Path::new(&dir).join(format!("display-{i}-small.jpg")), &small).unwrap();
+                let at = std::time::Instant::now();
+                for _ in 0..10 { grab.look(d, true); }
+                let looked = at.elapsed() / 10;
+                let at = std::time::Instant::now();
+                for _ in 0..10 { let (px, w, h) = grab.picture(d, 1200, true).unwrap(); screen_jpeg(px, w, h, true).unwrap(); }
+                println!("display {i}: {}x{} sum {sum:016x}; a look {looked:?}, a picture {:?}; {} KB large, {} KB small", d.w, d.h, at.elapsed() / 10, jpeg.len() / 1024, small.len() / 1024);
+            }
+        }
     }
 }

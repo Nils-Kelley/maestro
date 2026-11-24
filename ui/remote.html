@@ -18,9 +18,12 @@
   Served by the app when remote access is on (docs/remote.md). It talks to the app over one WebSocket:
     page → app   hello {token} or hello {pair, name} · list · chat {name, after} · say {name, text, enter} · end {name}
                  open {id, name, cols, rows} · new {id, kind, proj, prompt, cols, rows} · in {id, data} · size {id, cols, rows} · close {id}
-                 push {sub} or push {off}
+                 push {sub} or push {off} · screen {pick, width, fresh?} or screen {off} · seen {n}
+                 input {what: at | move | btn | click | wheel | key | text, …}: the pointer and the keys of the computer
     app → page   hello {host, token?, vapid?} · denied · list {sessions, projects} · chat {name, found, reset, items} · browser {name, state, page, pages} · frame {name, n, data, w, h}
-                 opened {id, name} · out {id, data} · exit {id} · err {id, text}
+                 opened {id, name} · out {id, data} · exit {id} · err {id, text} · screens {can, allowed, control, items} · ptr {x, y}
+                 and, not as text, a picture of a display: 'S', which display, in how many parts, which picture (n), the display's
+                 width and height as sent; then each part that changed: x, y, width, height, the length of its JPEG, the JPEG
 -->
 <style>
 :root {
@@ -173,6 +176,26 @@ textarea::placeholder, input::placeholder { color: var(--three); }
 body.gitting #gitv { transform: none; visibility: visible; transition: transform 0.32s var(--ease), visibility 0s; }
 body.gitting #home { transform: translateX(-25%); }
 #gitv .vhead { flex-wrap: nowrap; }
+/* the computer's own screens: every display as a card, and one of them as large as this screen allows. Looked at, not touched. */
+.htabs.three { grid-template-columns: 1fr 1fr 1fr; }
+#scr { position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column; background: #0b0b0d; transform: translateX(100%); visibility: hidden; transition: transform 0.32s var(--ease), visibility 0s 0.32s; }
+body.screening #scr { transform: none; visibility: visible; transition: transform 0.32s var(--ease), visibility 0s; }
+#scr .vhead { flex-wrap: nowrap; background: var(--bg); } #scr.full .vhead, #scr.full #scrbar { display: none; }
+#scrlist { padding-top: 16px; padding-left: calc(var(--pad) + var(--sl)); padding-right: calc(var(--pad) + var(--sr)); }
+.scard { display: block; width: 100%; max-width: 760px; margin: 0 auto 20px; } .scard:active { opacity: 0.6; }
+.scard canvas { display: block; width: 100%; height: auto; border-radius: 10px; background: #000; border: 1px solid var(--line); } .scard span { display: block; margin-top: 8px; color: var(--two); font-size: 14.5px; } .scard b { color: var(--fg); font-weight: 600; }
+#scrnote { color: var(--three); text-align: center; font-size: 15px; padding: 60px 10px; line-height: 1.45; }
+#scrview { flex: 1; min-height: 0; display: flex; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y; scrollbar-width: none; } #scrview::-webkit-scrollbar { display: none; }
+#scrview canvas { flex: none; margin: auto; display: block; height: auto; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* using the display: what a finger does there, and the keys */
+#scrbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px calc(10px + var(--sr)) calc(8px + var(--sb)) calc(10px + var(--sl)); border-top: 1px solid var(--line); background: var(--bg); }
+#scrmode { flex: 1; grid-template-columns: 1fr 1fr 1fr; } #scrmode button { min-height: 34px; font-size: 14.5px; }
+#scrkb[aria-pressed=true] { background: var(--raised); }
+#scrkeys { background: var(--bg); } #scr.typing #scrbar { padding-bottom: 8px; }
+#scrtype { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; font-size: 16px; resize: none; }
+#scrview.using { touch-action: none; } #scrview.using canvas { cursor: none; }
+#scrout, #scrkbf { position: absolute; top: calc(8px + var(--st)); right: calc(8px + var(--sr)); z-index: 2; width: 40px; height: 40px; border-radius: 20px; display: grid; place-items: center; background: rgba(24, 24, 27, 0.62); color: #fff; opacity: 0.6; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+#scrkbf { top: calc(56px + var(--st)); } #scrkbf[aria-pressed=true] { opacity: 0.95; }
 .chip { display: inline-block; padding: 1px 7px; border-radius: 6px; background: var(--raised); color: var(--two); font: 12.5px var(--mono); vertical-align: 1px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .meta .chip { margin-right: 6px; vertical-align: middle; } .plus { color: var(--ok); } .minus { color: var(--bad); } .ahead { color: var(--accent); }
 .gline { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px calc(var(--pad) + var(--sr)) 8px calc(var(--pad) + var(--sl)); border-bottom: 1px solid var(--line); } button.gline:active { background: var(--group); }
@@ -235,7 +258,7 @@ body.gitting #home { transform: translateX(-25%); }
       <button class="tool" type="button" id="add" aria-label="New session"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
     </header>
     <p class="offline" id="offline" hidden></p>
-    <div class="seg htabs" id="htabs" role="group" aria-label="What to show"><button type="button" data-home="sessions" aria-pressed="true">Sessions</button><button type="button" data-home="projects" aria-pressed="false">Projects</button></div>
+    <div class="seg htabs" id="htabs" role="group" aria-label="What to show"><button type="button" data-home="sessions" aria-pressed="true">Sessions</button><button type="button" data-home="projects" aria-pressed="false">Projects</button><button type="button" id="scropen" aria-pressed="false" hidden>Screens</button></div>
     <div class="scroll" id="sessbox"><div id="rows"></div></div>
     <div class="scroll" id="repobox" hidden><div id="repos"></div></div>
   </main>
@@ -247,6 +270,30 @@ body.gitting #home { transform: translateX(-25%); }
       <button class="tool" type="button" id="gwrap" aria-label="Wrap long lines" aria-pressed="true" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h13a3 3 0 010 6h-4m0 0l2.5-2.5M13 18l2.5 2.5M4 18h5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </div>
     <div class="scroll" id="gbody"></div>
+  </section>
+
+  <section id="scr" aria-label="The computer's screens">
+    <div class="vhead">
+      <button class="tool" type="button" id="scrback" aria-label="Back"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <span class="tt"><span class="t" id="scrtitle"></span><span class="n" id="scrsub"></span></span>
+      <button class="tool" type="button" id="scrfull" aria-label="Fill this screen with it" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <div class="scroll" id="scrlist"></div>
+    <div id="scrview" hidden><canvas id="scrcan" width="0" height="0" role="img" aria-label="The display, as it is now"></canvas></div>
+    <div class="keys" id="scrkeys" role="group" aria-label="Keys of the computer" hidden>
+      <button type="button" data-sk="esc">esc</button><button type="button" data-sk="tab">tab</button>
+      <button type="button" data-sm="ctrl" aria-pressed="false">ctrl</button><button type="button" data-sm="alt" aria-pressed="false">alt</button><button type="button" data-sm="shift" aria-pressed="false">shift</button><button type="button" data-sm="win" aria-pressed="false">win</button>
+      <button type="button" data-sk="left">←</button><button type="button" data-sk="up">↑</button><button type="button" data-sk="down">↓</button><button type="button" data-sk="right">→</button>
+      <button type="button" data-sk="enter">enter</button><button type="button" data-sk="backspace">⌫</button><button type="button" data-sk="delete">del</button>
+      <button type="button" data-sk="home">home</button><button type="button" data-sk="end">end</button><button type="button" data-sk="pgup">pg↑</button><button type="button" data-sk="pgdn">pg↓</button>
+    </div>
+    <div id="scrbar" hidden>
+      <div class="seg" id="scrmode" role="group" aria-label="What a finger does on the display"><button type="button" data-smode="look">Look</button><button type="button" data-smode="pad">Trackpad</button><button type="button" data-smode="touch">Touch</button></div>
+      <button class="tool" type="button" id="scrkb" aria-label="The keyboard" aria-pressed="false"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2.5" stroke="currentColor" stroke-width="1.8"/><path d="M7 10h.01M10.3 10h.01M13.7 10h.01M17 10h.01M8 14h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    </div>
+    <textarea id="scrtype" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Type on the computer" tabindex="-1"></textarea>
+    <button type="button" id="scrkbf" aria-label="The keyboard" aria-pressed="false" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2.5" stroke="currentColor" stroke-width="1.8"/><path d="M7 10h.01M10.3 10h.01M13.7 10h.01M17 10h.01M8 14h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    <button type="button" id="scrout" aria-label="Show the bars again" hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </section>
 
   <section id="view" aria-label="Session">
@@ -359,19 +406,25 @@ function send(o) { if (S.up) S.ws.send(JSON.stringify(o)); return S.up; }
 function link(state) { const o = $('#offline'); o.hidden = state === 'on'; o.textContent = state === 'off' ? 'Not connected. Trying again…' : 'Connecting…'; }
 function showPair(why) { $('#app').hidden = true; $('#pair').hidden = false; $('#pairin').value = ''; $('#pairin').classList.add('digits'); document.body.classList.remove('viewing'); if (why) say(why, 'bad'); }
 function connect() {
+  // (the computer replaces a device's token now and then: the newest is the one that was last written down, here or in
+  // another tab of this browser)
+  S.token = store.get('maestro-token') || S.token;
   if (!S.token && !S.pair) return showPair();
   $('#pair').hidden = true; $('#app').hidden = false;
   const ws = S.ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.onopen = () => ws.send(JSON.stringify(S.pair ? { op: 'hello', pair: S.pair, name: deviceName() } : { op: 'hello', token: S.token }));
-  ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch (_) { return; } heard(m); };
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = (e) => { if (typeof e.data !== 'string') return heardPicture(e.data); let m; try { m = JSON.parse(e.data); } catch (_) { return; } heard(m); };
   ws.onclose = () => { if (S.ws !== ws) return; S.up = false; if (!S.token && !S.pair) return; link('off'); setTimeout(connect, Math.min(5000, 600 * ++S.tries)); };
 }
 function heard(m) {
-  if (m.op === 'hello') { if (m.token) { S.token = m.token; store.set('maestro-token', m.token); } S.pair = ''; S.vapid = m.vapid || ''; S.up = true; S.tries = 0; link('on'); $('#host').textContent = m.host || ''; send({ op: 'list' }); if (S.cur) resume(); return; }
+  if (m.op === 'hello') { if (m.token) { S.token = m.token; store.set('maestro-token', m.token); } S.pair = ''; S.vapid = m.vapid || ''; S.up = true; S.tries = 0; link('on'); $('#host').textContent = m.host || ''; send({ op: 'list' }); if (S.cur) resume(); if (SC.on) scrAsk(); return; }
   if (m.op === 'denied') { const paired = !!S.token && !S.pair; S.token = ''; S.pair = ''; store.set('maestro-token', null); S.ws.close(); return showPair(paired ? 'This device is no longer paired with the computer.' : 'That code is not right, or it has run out. Check it on the computer, or make a new one there.'); }
-  if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.dark = !!m.dark; S.canDark = !!m.canDark; drawDark(); S.loaded = true; drawRows(); webOffer(); if (G.tab === 'projects') drawRepos(); if (G.cur && gitTop().k === 'repo') drawGit(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
+  if (m.op === 'list') { S.sessions = m.sessions || []; S.projects = m.projects || []; S.dark = !!m.dark; S.canDark = !!m.canDark; drawDark(); $('#scropen').hidden = !m.canScreens; $('#htabs').classList.toggle('three', !!m.canScreens); S.loaded = true; drawRows(); webOffer(); if (G.tab === 'projects') drawRepos(); if (G.cur && gitTop().k === 'repo') drawGit(); if (S.wanted) { const s = S.sessions.find((x) => x.name === S.wanted); S.wanted = ''; if (s) openView(s); } return; }
   if (m.op === 'chat') return heardChat(m);
   if (m.op === 'browser' || m.op === 'frame') return heardWeb(m);
+  if (m.op === 'screens') return heardScreens(m);
+  if (m.op === 'ptr') return heardPointer(m);
   if (m.op === 'repos') { G.repos = m.items || []; G.more = m.more || 0; G.loaded = G.repos.length > 0 || !G.more; if (S.cur && S.cur.mode === 'git' && !G.cur && !G.more) startSGit(S.cur); return drawRepos(); }
   if (m.op === 'repo' || m.op === 'commit' || m.op === 'diff' || m.op === 'giterr') return heardGit(m);
   if (m.op === 'out') { const c = S.cur; if (c && c.id === m.id && c.term) c.term.write(m.data, c.starting ? () => { if (S.cur === c && c.term && shows(c.term)) { starting(null); toChat(c); } } : undefined); return; }
@@ -657,6 +710,206 @@ function zoomWeb(z, x, y) {
   for (const g of ['gesturestart', 'gesturechange']) v.addEventListener(g, (e) => e.preventDefault());
 }
 
+// ---- the computer's own screens: every display small, and one of them large. Looked at, not touched. ----
+// The computer sends a display again when it has changed and the last picture was shown here. One display large is asked for
+// at the width it is drawn at, so enlarging it makes it sharper, up to the display's own pixels.
+const SC = { on: false, heard: false, can: true, allowed: true, items: [], pick: '', z: 1, sig: '', full: false, sharp: 0, drawn: Promise.resolve(), control: false, mode: store.get('maestro-smode') || 'pad', mods: new Set(), typed: ' ', kb: false };
+const scrOne = () => SC.items.find((d) => String(d.i) === SC.pick);
+const scrName = (d) => d.main ? 'Main display' : `Display ${d.i + 1}`;
+// one display at its smallest: the whole of it fits the view
+function scrBase() { const v = $('#scrview'), d = scrOne(); return d ? Math.max(1, Math.min(v.clientWidth, v.clientHeight * d.w / d.h)) : 0; }
+function scrFit() { const b = scrBase(); if (b) $('#scrcan').style.width = `${Math.round(b * SC.z)}px`; }
+function scrAsk(fresh) {
+  if (!SC.on || document.visibilityState !== 'visible') return; const dpr = window.devicePixelRatio || 1; const d = scrOne();
+  send({ op: 'screen', fresh: !!fresh, pick: d ? SC.pick : '', width: Math.round(d ? Math.min(d.w, scrBase() * SC.z * Math.min(3, dpr)) : Math.min(900, Math.max(320, $('#scrlist').clientWidth) * Math.min(2, dpr))) });
+}
+function openScreens() { Object.assign(SC, { on: true, heard: false, pick: '', z: 1, sig: '' }); $('#scrlist').innerHTML = ''; document.body.classList.add('screening'); drawScr(); scrAsk(); }
+function closeScreens() {
+  if (!SC.on) return; scrKeyboard(false); SC.on = false; send({ op: 'screen', off: true }); scrFull(false); document.body.classList.remove('screening');
+  // (the computer shows a device one thing at a time: a session's browser that was being watched is asked for again)
+  if (S.cur && S.cur.mode === 'web') startWeb(S.cur);
+}
+function scrPick(i) {
+  SC.pick = String(i); SC.z = 1; const c = $('#scrcan'); const small = i === '' ? null : $(`#scrlist canvas[data-i="${SC.pick}"]`);
+  // until the large picture arrives, the small one stands in for it
+  if (small && small.width > 1) { c.width = small.width; c.height = small.height; c.getContext('2d').drawImage(small, 0, 0); } else c.width = c.height = 0;
+  c.whole = false;
+  SC.sig = ''; drawScr(); $('#scrview').scrollTo(0, 0); scrAsk();
+}
+function scrBack() { if (SC.pick !== '' && SC.items.length > 1) { scrFull(false); return scrPick(''); } closeScreens(); }
+function drawScr() {
+  const d = scrOne(); $('#scrlist').hidden = !!d; $('#scrview').hidden = !d; $('#scrfull').hidden = !d;
+  $('#scrtitle').textContent = d ? scrName(d) : 'Screens'; $('#scrsub').textContent = d ? `${d.w} × ${d.h}` : $('#host').textContent;
+  drawUse();
+  if (d) return scrFit();
+  const why = !SC.heard ? 'Looking at the screens…' : !SC.can ? 'This computer cannot show its screens yet. For now that works where Maestro runs on Windows.'
+    : !SC.allowed ? 'This device is not allowed to see the computer’s screens. At the computer, open Remote access and choose “Let it see the screens” beside this device.' : !SC.items.length ? 'No display was found.' : '';
+  const sig = why || SC.items.map((x) => `${x.i}:${x.w}x${x.h}:${x.main}`).join();
+  if (sig === SC.sig) return; SC.sig = sig;
+  $('#scrlist').innerHTML = why ? `<div id="scrnote">${esc(why)}</div>` : SC.items.map((x) => `<button class="scard" type="button" data-scr="${x.i}" aria-label="${esc(scrName(x))}"><canvas data-i="${x.i}" width="1" height="1" style="aspect-ratio:${x.w}/${x.h}"></canvas><span><b>${esc(scrName(x))}</b> · ${x.w} × ${x.h}</span></button>`).join('');
+}
+function heardScreens(m) {
+  if (!SC.on) return; SC.heard = true; SC.can = !!m.can; SC.allowed = !!m.allowed; SC.control = !!m.control;
+  SC.items = (Array.isArray(m.items) ? m.items : []).map((d) => ({ i: d.i >>> 0, w: d.w >>> 0, h: d.h >>> 0, main: !!d.main })).filter((d) => d.w && d.h);
+  if (SC.pick !== '' && !scrOne()) { SC.pick = ''; scrFull(false); }
+  // a computer with one display has nothing to choose between
+  if (SC.pick === '' && SC.items.length === 1) SC.pick = String(SC.items[0].i);
+  drawScr(); scrAsk();
+}
+// a picture of a display, or the parts of it that changed: drawn where that display is shown, one picture after the other,
+// and the computer is told, which lets it send the next
+function heardPicture(buf) {
+  if (buf.byteLength < 12) return; const v = new DataView(buf); if (v.getUint8(0) !== 83) return;
+  const i = v.getUint8(1), count = v.getUint8(2), n = v.getUint32(4, true), w = v.getUint16(8, true), h = v.getUint16(10, true);
+  const seen = () => send({ op: 'seen', n });
+  if (!SC.on || !window.createImageBitmap) return void seen();
+  const parts = []; let at = 12;
+  for (let k = 0; k < count; k++) {
+    if (at + 12 > buf.byteLength) return void seen(); const len = v.getUint32(at + 8, true); if (at + 12 + len > buf.byteLength) return void seen();
+    parts.push({ x: v.getUint16(at, true), y: v.getUint16(at + 2, true), w: v.getUint16(at + 4, true), h: v.getUint16(at + 6, true), jpeg: new Blob([new Uint8Array(buf, at + 12, len)], { type: 'image/jpeg' }) }); at += 12 + len;
+  }
+  const decoded = Promise.all(parts.map((p) => createImageBitmap(p.jpeg)));
+  SC.drawn = SC.drawn.then(() => decoded).then((pictures) => {
+    const one = SC.pick !== ''; const c = !SC.on ? null : one ? (String(i) === SC.pick ? $('#scrcan') : null) : $(`#scrlist canvas[data-i="${i}"]`);
+    const whole = parts.length === 1 && !parts[0].x && !parts[0].y && parts[0].w === w && parts[0].h === h;
+    // parts of a display go onto the picture they are parts of: without it here, the whole display is asked for again
+    if (c && !whole && (c.width !== w || c.height !== h || !c.whole)) scrAsk(true);
+    else if (c) { if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } const g = c.getContext('2d'); pictures.forEach((b, k) => g.drawImage(b, parts[k].x, parts[k].y)); c.whole = true; if (one) scrFit(); }
+    for (const b of pictures) if (b.close) b.close();
+  }).catch(() => {}).then(seen);
+}
+// ---- using the display, for a device that was given the pointer and the keys at the computer. Look: a finger moves the
+// picture, as before. Trackpad: a finger moves the computer's pointer, a tap clicks, two fingers scroll or (tapped) click
+// the right button, a finger held down drags. Touch: a tap clicks where it lands, held down it clicks the right button.
+const using = () => SC.control && SC.pick !== '' && SC.mode !== 'look';
+const inp = (o) => send({ op: 'input', ...o });
+function drawUse() {
+  const can = SC.control && !!scrOne(); $('#scrbar').hidden = !can; if (!can && SC.kb) scrKeyboard(false);
+  document.querySelectorAll('#scrmode [data-smode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.smode === SC.mode)));
+  $('#scrview').classList.toggle('using', can && SC.mode === 'pad'); $('#scrkb').setAttribute('aria-pressed', String(SC.kb));
+  // with the bars gone, the keyboard is still to be had (for a device that is using the display, not only looking)
+  $('#scrkbf').hidden = !(can && SC.full && SC.mode !== 'look'); $('#scrkbf').setAttribute('aria-pressed', String(SC.kb));
+  document.querySelectorAll('#scrkeys [data-sm]').forEach((b) => b.setAttribute('aria-pressed', String(SC.mods.has(b.dataset.sm))));
+}
+function scrMode(m) { SC.mode = m; store.set('maestro-smode', m); if (m === 'look') scrKeyboard(false); drawUse(); }
+// the phone's own keyboard, and a row of the keys it does not have
+function scrKeyboard(on) {
+  on = !!on && using(); if (on === SC.kb) return; SC.kb = on; $('#scrkeys').hidden = !on; $('#scr').classList.toggle('typing', on); const t = $('#scrtype');
+  if (on) { t.value = SC.typed = ' '; t.focus({ preventScroll: true }); } else { t.blur(); SC.mods.clear(); }
+  drawUse(); setTimeout(() => { scrFit(); scrAsk(); }, 300);
+}
+// a key by its name, with the keys held beside it (ctrl, alt, shift, win stay down for the one key that follows)
+function scrKey(k) { if (!using()) return; inp({ what: 'key', k, mods: [...SC.mods] }); if (SC.mods.size) { SC.mods.clear(); drawUse(); } }
+function scrText(t) { if (!using() || !t) return; if (SC.mods.size && /^[a-z0-9]$/i.test(t)) return scrKey(t.toLowerCase()); inp({ what: 'text', t }); }
+// where the computer's pointer is on the display: when the picture is enlarged, the part with the pointer is kept in view
+function heardPointer(m) {
+  const d = scrOne(); if (!d || !using() || SC.mode !== 'pad') return; const v = $('#scrview'), c = $('#scrcan'); if (!c.clientWidth) return;
+  const x = c.offsetLeft + (m.x / d.w) * c.clientWidth, y = c.offsetTop + (m.y / d.h) * c.clientHeight; const mx = v.clientWidth * 0.18, my = v.clientHeight * 0.18;
+  if (x < v.scrollLeft + mx) v.scrollLeft = x - mx; else if (x > v.scrollLeft + v.clientWidth - mx) v.scrollLeft = x - v.clientWidth + mx;
+  if (y < v.scrollTop + my) v.scrollTop = y - my; else if (y > v.scrollTop + v.clientHeight - my) v.scrollTop = y - v.clientHeight + my;
+}
+{
+  const v = $('#scrview'), c = $('#scrcan'), t = $('#scrtype'); let move = { x: 0, y: 0, due: false }; let touched = 0;
+  // a place on the picture as parts of the display's width and height
+  const place = (x, y) => { const r = c.getBoundingClientRect(); return r.width && r.height ? { x: Math.min(1, Math.max(0, (x - r.left) / r.width)), y: Math.min(1, Math.max(0, (y - r.top) / r.height)) } : null; };
+  // the pointer is moved at most once for each time the screen is drawn here
+  const moveBy = (dx, dy) => { move.x += dx; move.y += dy; if (move.due) return; move.due = true; requestAnimationFrame(() => { move.due = false; if (move.x || move.y) inp({ what: 'move', dx: move.x, dy: move.y }); move.x = move.y = 0; }); };
+  SC.touch = {
+    // one finger went down: where, when, and the wait that makes it a held one
+    start(e) { const f = e.touches[0]; clearTimeout(this.hold); Object.assign(this, { x: f.clientX, y: f.clientY, x0: f.clientX, y0: f.clientY, at: Date.now(), moved: false, drag: false, two: null });
+      this.hold = setTimeout(() => { if (this.moved || !using()) return; buzz(20); this.moved = true; if (SC.mode === 'pad') { this.drag = true; inp({ what: 'btn', b: 0, down: true }); } else { const p = place(this.x0, this.y0); if (p) inp({ what: 'click', b: 1, ...p }); } }, 480); },
+    // a second finger: the two together scroll, enlarge, or (lifted at once) click the right button
+    second(e) { clearTimeout(this.hold); const a = e.touches[0], b = e.touches[1]; this.two = { at: Date.now(), d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), z: SC.z, x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2, kind: '' }; },
+    move(e) {
+      if (this.two && e.touches.length === 2) {
+        const a = e.touches[0], b = e.touches[1], w = this.two; const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), x = (a.clientX + b.clientX) / 2, y = (a.clientY + b.clientY) / 2;
+        if (!w.kind) { if (Math.abs(d / w.d - 1) > 0.09) w.kind = 'zoom'; else if (SC.mode === 'pad' && Math.hypot(x - w.x, y - w.y) > 7) w.kind = 'scroll'; }
+        if (w.kind === 'zoom') { e.preventDefault(); scrZoom(w.z * d / w.d, x, y); }
+        // the way a phone scrolls: the page follows the fingers
+        if (w.kind === 'scroll') { e.preventDefault(); inp({ what: 'wheel', dx: Math.round((w.x - x) * 4), dy: Math.round((y - w.y) * 4) }); w.x = x; w.y = y; }
+        return;
+      }
+      const f = e.touches[0]; if (!f || this.two) return; const dx = f.clientX - this.x, dy = f.clientY - this.y; this.x = f.clientX; this.y = f.clientY;
+      if (!this.moved && Math.hypot(f.clientX - this.x0, f.clientY - this.y0) > 6) { this.moved = true; clearTimeout(this.hold); }
+      if (SC.mode !== 'pad') return; e.preventDefault(); const d = scrOne(); if (d && c.clientWidth && (this.moved || this.drag)) moveBy(dx * d.w / c.clientWidth, dy * d.w / c.clientWidth);
+    },
+    end(e) {
+      clearTimeout(this.hold); touched = Date.now();
+      if (this.two) { if (e.touches.length) return; const w = this.two; this.two = null; if (SC.mode === 'pad' && !w.kind && Date.now() - w.at < 320) { e.preventDefault(); buzz(10); inp({ what: 'click', b: 1 }); } return; }
+      if (e.touches.length) return;
+      if (this.drag) { this.drag = false; e.preventDefault(); return void inp({ what: 'btn', b: 0, down: false }); }
+      if (this.moved || Date.now() - this.at > 400) return;
+      e.preventDefault(); if (SC.mode === 'pad') return void inp({ what: 'click', b: 0 }); const p = place(this.x0, this.y0); if (p) inp({ what: 'click', b: 0, ...p });
+    },
+  };
+  // a mouse over the picture is the computer's mouse (not the one a touch is turned into a moment later)
+  const mouse = (e) => using() && e.target === c && Date.now() - touched > 800;
+  v.addEventListener('mousemove', (e) => { if (!mouse(e)) return; const p = place(e.clientX, e.clientY); if (!p || SC.hover) return void (SC.at = p); SC.at = p; SC.hover = requestAnimationFrame(() => { SC.hover = 0; inp({ what: 'at', ...SC.at }); }); });
+  v.addEventListener('mousedown', (e) => { if (!mouse(e) || e.button > 2) return; e.preventDefault(); const p = place(e.clientX, e.clientY); if (p) inp({ what: 'at', ...p }); SC.down = e.button; inp({ what: 'btn', b: [0, 2, 1][e.button], down: true }); });
+  addEventListener('mouseup', (e) => { if (SC.down == null || e.button !== SC.down) return; SC.down = null; inp({ what: 'btn', b: [0, 2, 1][e.button], down: false }); });
+  v.addEventListener('contextmenu', (e) => { if (using()) e.preventDefault(); });
+  v.addEventListener('wheel', (e) => { if (e.ctrlKey || !using()) return; e.preventDefault(); const k = e.deltaMode === 1 ? 40 : 1.2; inp({ what: 'wheel', dx: Math.round(e.deltaX * k), dy: Math.round(-e.deltaY * k) }); }, { passive: false });
+  // what the phone's keyboard does to the hidden line is done on the computer: the end of the line that changed is taken
+  // back with backspaces and typed again. (A keyboard that guesses words rewrites the word it is on as it goes.)
+  t.addEventListener('input', () => {
+    const now = t.value, was = SC.typed; let same = 0; while (same < was.length && same < now.length && was[same] === now[same]) same++;
+    for (let k = [...was.slice(same)].length; k > 0; k--) scrKey('backspace'); scrText(now.slice(same)); SC.typed = now;
+    if (!SC.composing && (now.length > 80 || !now.length)) t.value = SC.typed = ' ';
+  });
+  t.addEventListener('compositionstart', () => { SC.composing = true; }); t.addEventListener('compositionend', () => { SC.composing = false; });
+  // (a tap on one of the keys or on the bar must not take the phone's keyboard away)
+  for (const el of [$('#scrkeys'), $('#scrbar'), $('#scrkbf')]) el.addEventListener('mousedown', (e) => e.preventDefault());
+  t.addEventListener('blur', () => setTimeout(() => { if (SC.kb && document.activeElement !== t) scrKeyboard(false); }, 250));
+  // a keyboard of its own (a computer's): its keys are the computer's keys while the display is being used
+  const NAMES = { Enter: 'enter', Backspace: 'backspace', Tab: 'tab', Escape: 'esc', ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', Delete: 'delete', Home: 'home', End: 'end', PageUp: 'pgup', PageDown: 'pgdn', Insert: 'insert', ' ': 'space' };
+  document.addEventListener('keydown', (e) => {
+    if (!SC.on || !using() || $('.sheet.on') || e.isComposing) return; const typing = e.target === t; if (!typing && e.target.matches && e.target.matches('input, textarea')) return;
+    const held = ['ctrl', 'alt', 'shift', 'win'].filter((m, i) => [e.ctrlKey, e.altKey, e.shiftKey, e.metaKey][i]); const combo = e.ctrlKey || e.altKey || e.metaKey;
+    const name = NAMES[e.key] || (/^F([1-9]|1[0-2])$/.test(e.key) ? e.key.toLowerCase() : combo && /^[a-z0-9]$/i.test(e.key) ? e.key.toLowerCase() : '');
+    // (on the hidden line, what changes the line arrives as the change it makes: letters, Enter, Backspace)
+    if (typing && !combo && (e.key.length === 1 || e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Unidentified' || e.key === 'Process')) return;
+    if (name) { e.preventDefault(); e.stopPropagation(); return void inp({ what: 'key', k: name, mods: [...new Set([...held.filter((m) => m !== 'shift' || name.length > 1 || combo), ...SC.mods])] }); }
+    if (e.key.length === 1 && !combo) { e.preventDefault(); scrText(e.key); }
+  }, true);
+}
+// larger and smaller: two fingers, a double tap, or Ctrl and the wheel; the place under the fingers stays under them
+function scrZoom(z, x, y) {
+  const v = $('#scrview'), c = $('#scrcan'); z = Math.max(1, Math.min(8, z)); if (z === SC.z || !scrOne()) return;
+  const a = c.getBoundingClientRect(); if (x == null) { const r = v.getBoundingClientRect(); x = r.left + r.width / 2; y = r.top + r.height / 2; }
+  const fx = a.width ? (x - a.left) / a.width : 0.5, fy = a.height ? (y - a.top) / a.height : 0.5;
+  SC.z = z; scrFit(); const b = c.getBoundingClientRect(); v.scrollLeft += b.left + fx * b.width - x; v.scrollTop += b.top + fy * b.height - y;
+  clearTimeout(SC.sharp); SC.sharp = setTimeout(scrAsk, 250);
+}
+// nothing but the display: the bar goes, and where the browser can, so does its own
+function scrFull(on) {
+  if (SC.full === on) return; SC.full = on; $('#scr').classList.toggle('full', on); $('#scrout').hidden = !on; drawUse(); const el = document.documentElement;
+  try { if (on && el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {}); else if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (_) {}
+  setTimeout(() => { scrFit(); scrAsk(); }, 80);
+}
+{
+  const v = $('#scrview'); let pinch = null; let tapped = 0;
+  const span = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+  v.addEventListener('touchstart', (e) => { if (using()) return e.touches.length === 1 ? SC.touch.start(e) : e.touches.length === 2 ? SC.touch.second(e) : 0; if (e.touches.length === 2) pinch = { d: span(e), z: SC.z }; }, { passive: true });
+  v.addEventListener('touchmove', (e) => { if (using()) return SC.touch.move(e); if (!pinch || e.touches.length !== 2) return; e.preventDefault(); scrZoom(pinch.z * span(e) / pinch.d, (e.touches[0].clientX + e.touches[1].clientX) / 2, (e.touches[0].clientY + e.touches[1].clientY) / 2); }, { passive: false });
+  v.addEventListener('touchend', (e) => {
+    if (using()) return SC.touch.end(e);
+    if (pinch) { if (e.touches.length < 2) pinch = null; tapped = 0; return; }
+    if (e.touches.length) return; const t = e.changedTouches[0]; const now = Date.now();
+    if (now - tapped < 300) { tapped = 0; e.preventDefault(); scrZoom(SC.z > 1 ? 1 : 2.5, t.clientX, t.clientY); } else tapped = now;
+  });
+  v.addEventListener('touchcancel', () => { if (SC.touch.drag) { SC.touch.drag = false; inp({ what: 'btn', b: 0, down: false }); } clearTimeout(SC.touch.hold); SC.touch.two = null; pinch = null; });
+  v.addEventListener('scroll', () => { tapped = 0; }, { passive: true });
+  v.addEventListener('wheel', (e) => { if (!e.ctrlKey) return; e.preventDefault(); scrZoom(SC.z * Math.exp(-e.deltaY / 300), e.clientX, e.clientY); }, { passive: false });
+  v.addEventListener('dblclick', (e) => { if (!using()) scrZoom(SC.z > 1 ? 1 : 2.5, e.clientX, e.clientY); });
+  for (const g of ['gesturestart', 'gesturechange']) v.addEventListener(g, (e) => e.preventDefault());
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) scrFull(false); });
+  // the phone was turned, or the window resized: the display is fitted again, and asked for at its new width
+  addEventListener('resize', () => { if (!SC.on || SC.pick === '') return; scrFit(); clearTimeout(SC.sharp); SC.sharp = setTimeout(scrAsk, 250); });
+  // a page nobody is looking at is sent nothing; a device that was not allowed asks again, in case it was allowed since
+  document.addEventListener('visibilitychange', () => { if (!SC.on) return; if (document.visibilityState === 'visible') scrAsk(); else send({ op: 'screen', off: true }); });
+  setInterval(() => { if (SC.on && SC.heard && SC.can && !SC.allowed) scrAsk(); }, 3000);
+}
+
 // ---- the projects: every repo with what has changed in it, its commits and their diffs. Looked at, not acted on. ----
 const G = { tab: 'sessions', repos: [], loaded: false, cur: null, stack: [], wrap: store.get('maestro-wrap') !== '0' };
 const gitTop = () => G.stack[G.stack.length - 1] || {};
@@ -863,6 +1116,11 @@ document.addEventListener('click', (e) => {
   if (t.closest('#prefs')) { drawPrefs(); return sheet('#sheet-prefs'); }
   if (t.closest('[data-more]')) { const o = t.closest('.m'); o.classList.toggle('open'); t.closest('[data-more]').textContent = o.classList.contains('open') ? 'show less' : `${$('pre', o).textContent.split('\n').length} lines · show all`; return; }
   if (t.closest('[data-home]')) return homeTab(t.closest('[data-home]').dataset.home);
+  if (t.closest('#scropen')) return openScreens(); if (t.closest('#scrback')) return scrBack(); if (t.closest('#scrfull')) return scrFull(true); if (t.closest('#scrout')) return scrFull(false);
+  if (t.closest('[data-scr]')) return scrPick(t.closest('[data-scr]').dataset.scr);
+  if (t.closest('[data-smode]')) return scrMode(t.closest('[data-smode]').dataset.smode); if (t.closest('#scrkb') || t.closest('#scrkbf')) { if (SC.mode === 'look') scrMode('pad'); return scrKeyboard(!SC.kb); }
+  if (t.closest('[data-sk]')) { scrKey(t.closest('[data-sk]').dataset.sk); return void (SC.kb && $('#scrtype').focus({ preventScroll: true })); }
+  if (t.closest('[data-sm]')) { const m = t.closest('[data-sm]').dataset.sm; if (SC.mods.has(m)) SC.mods.delete(m); else SC.mods.add(m); drawUse(); return void (SC.kb && $('#scrtype').focus({ preventScroll: true })); }
   if (t.closest('#scanbtn')) return scan();
   if (t.closest('#scanstop')) return scanStop();
   if (t.closest('#gback') || t.closest('#sgback')) return gitBack();
@@ -889,6 +1147,7 @@ $('#nfind').addEventListener('input', drawNew);
 // a keyboard of its own: Enter sends, Shift+Enter is a new line. On a phone Enter is a new line and the button sends.
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && $('.sheet.on')) return sheet(null);
+  if (e.key === 'Escape' && SC.on && !using()) return SC.full ? scrFull(false) : scrBack();
   if (e.key === 'Enter' && !e.shiftKey && hasKeys() && e.target.matches && e.target.matches('#line, #rtext')) { e.preventDefault(); e.target.closest('form').requestSubmit(); }
 });
 document.addEventListener('submit', (e) => {

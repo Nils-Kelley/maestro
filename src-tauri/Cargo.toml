@@ -31,6 +31,10 @@ hkdf = "0.12"
 aes-gcm = "0.10"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
+# the computer's screens on a paired device: each picture of a display is sent as a JPEG (Windows, where they are captured)
+[target.'cfg(windows)'.dependencies]
+jpeg-encoder = { version = "0.6", features = ["simd"] }
+
 [profile.dev]
 opt-level = 1
 
