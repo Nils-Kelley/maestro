@@ -1907,6 +1907,28 @@ fn set_on_top(on: bool, window: tauri::WebviewWindow) {
 fn attention(window: tauri::WebviewWindow) {
     let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
 }
+/// Move the window by its top bar: the page asks when the mouse goes down there. On Windows the framework remembers that a
+/// move is under way until the system says it has ended, and the system never says so for a move that did not begin (the
+/// button was already up again: a quick click). From then on every later move was taken for a second one and dropped,
+/// until the app was started again. So: no move is asked for unless the button is still down, and before one is, the
+/// window is told that none is under way, which is what clears that memory.
+#[tauri::command]
+fn drag(window: tauri::WebviewWindow) {
+    #[cfg(windows)]
+    {
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetAsyncKeyState(key: i32) -> i16;
+            fn GetSystemMetrics(which: i32) -> i32;
+            fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
+        }
+        // (the button that counts as the left one is the right one where they are swapped)
+        if unsafe { GetAsyncKeyState(if GetSystemMetrics(23) != 0 { 2 } else { 1 }) } >= 0 { return; }
+        // 0x0232: "the move or resize has ended"
+        if let Ok(h) = window.hwnd() { unsafe { SendMessageW(h.0 as isize, 0x0232, 0, 0); } }
+    }
+    let _ = window.start_dragging();
+}
 #[tauri::command]
 fn toggle_max(window: tauri::WebviewWindow) {
     if window.is_maximized().unwrap_or(false) { let _ = window.unmaximize(); } else { let _ = window.maximize(); }
@@ -3977,7 +3999,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            blackout, blackout_end, blackout_dim, load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_permit, remote_secure_only, remote_allow, remote_secure,
+            blackout, blackout_end, blackout_dim, load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, drag, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_permit, remote_secure_only, remote_allow, remote_secure,
         ])
         .run(tauri::generate_context!())
         .expect("Maestro could not start");

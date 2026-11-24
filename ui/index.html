@@ -303,6 +303,10 @@ const OS = window.__OS || (/Windows/i.test(navigator.userAgent) ? 'windows' : /M
 document.documentElement.classList.add('os-' + OS);
 // anything that goes wrong is written to maestro.log, and the intro can never be what is left on screen
 const trouble = (what) => { try { T.core.invoke('note', { text: String(what) }); } catch (_) {} const b = document.getElementById('boot'); if (b) b.hidden = true; };
+// Moving the window by its top bar. The app is asked (`drag`), not the framework's own listener for the bar: that one asks
+// for a move even when the button is up again, and one such move that never began stopped every later one (see `drag`).
+// A double click still reaches the framework's listener, which makes the window fill the screen.
+addEventListener('mousedown', (e) => { if (e.button !== 0 || e.detail !== 1 || !(e.target instanceof Element) || !e.target.hasAttribute('data-tauri-drag-region')) return; e.preventDefault(); e.stopPropagation(); T.core.invoke('drag').catch(() => {}); }, true);
 addEventListener('error', (e) => trouble(`${e.message} @ ${e.lineno}:${e.colno}`));
 addEventListener('unhandledrejection', (e) => trouble(`rejected: ${e.reason && (e.reason.stack || e.reason.message) || e.reason}`));
 // one small tooltip for every mark that carries data-tip

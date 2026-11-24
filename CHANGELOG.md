@@ -19,6 +19,9 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
   the screens back; moving the mouse does not.
 - A release has a name of its own (0.4.1.1) beside the three numbers Cargo builds.
 
+### Fixed
+- On Windows, a quick click on the top bar no longer stops the window from being dragged until the app is started again.
+
 ### Security
 - The remote page names its own script to the browser by its SHA-256 and no longer allows any script written into the page:
   text from a session cannot run as script there.
