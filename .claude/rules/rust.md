@@ -18,3 +18,5 @@ paths:
 - A window is moved through the `drag` command, never through the framework's `start_dragging` from the page: on Windows
   tao remembers a move until `WM_EXITSIZEMOVE`, and a move asked for with the button already up never ends, which drops
   every later one. `drag` asks only while the button is down and clears that memory first.
+- Everything the app does to the pointer and the keys carries `screen::OURS`: while the screens are dark, that is how what a
+  paired device does is told from a hand at the computer (`dark_watch`). What is decided there has to return at once.

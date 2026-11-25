@@ -47,6 +47,9 @@ cannot connect, look for another firewall or security product on the computer th
   enlarge it; when the browser has several pages open, choose which to look at. It only shows: nothing is tapped or typed
   into the page from here. It needs one setting, below.
 
+- **Open the artifacts.** A page a session published (Claude Code's Artifact tool) is a card in that session's conversation,
+  and Artifacts, beside Sessions and Projects, lists every one of the last month, the newest first. A card opens the page
+  itself at claude.ai, where you are signed in to the account that made it; Maestro keeps and serves none of it.
 - **See the computer's screens, and use them.** Screens, beside Sessions and Projects, shows every display of the computer
   as it is now. Tap one to have it alone, turn the phone to give it the width, pinch or double-tap to enlarge it (it is
   sent sharper as you do, up to the display's own pixels), and the button with the four corners leaves nothing but the display: the bar above it and the one under it go, what a finger does stays as it was chosen, and two small buttons over the picture bring the bars back and open the keyboard. A device
@@ -77,6 +80,10 @@ With the pointer and the keys, the bar under the display chooses what a finger d
 - **Touch**: a tap clicks where it lands; held down, it clicks the right button there. A finger still moves the picture.
 - The keyboard button brings up the phone's own keyboard, dictation included, and a row of the keys it lacks. `ctrl`, `alt`,
   `shift` and `win` stay down for the one key that follows: `ctrl`, then `c`.
+  **paste** sends what the phone has copied: it becomes what the computer has copied and is pasted where the keys go, as
+  one paste however long it is. (At the secure address the phone asks whether the page may read it; at the plain one the
+  page asks for it in a line you paste into.) `^C`, `^V`, `^X`, `^A` and `^Z` are the computer's own copy, paste, cut,
+  select all and undo.
 
 On a computer, the mouse over the picture is the other computer's mouse, and the keyboard its keyboard (`Esc` included: leave
 with the back button).
@@ -84,8 +91,11 @@ with the back button).
 A display is sent when it has changed and the last picture has been shown, so a slow connection gets fewer pictures rather
 than old ones, and a display where nothing moves costs nothing. After the first picture only the parts that changed are
 sent: a line typed in a terminal is a few kilobytes, not the whole display again. All displays together are small pictures,
-about one a second each. With [dark screens](configuration.md) on, the device sees what is under the black, not the black;
-a click from the device brings the screens back, as a click at the computer does.
+about one a second each. With [dark screens](configuration.md) on, the device sees what is under the black, not the black,
+and goes on using the computer in the dark: what it clicks and types reaches the windows under the black, and the screens
+stay dark. (Each thing it does would light the displays, as anything done at a computer does: they are switched off again at once.) A key or a click at the
+computer itself still brings the screens back. This is so on Windows; on the other systems a click from a device lands on
+the black and brings the screens back.
 
 This works where Maestro runs on Windows. What needs administrator rights is neither shown nor used: the prompt that asks
 for them, the lock screen, a window of a program that runs as administrator (it is seen, and takes no clicks or keys), and

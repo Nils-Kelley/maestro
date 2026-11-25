@@ -1790,7 +1790,11 @@ fn stay_awake() {
             const CONTINUOUS: u32 = 0x8000_0000;
             const SYSTEM_REQUIRED: u32 = 0x0000_0001;
             unsafe { SetThreadExecutionState(CONTINUOUS | SYSTEM_REQUIRED); }
-            while DARK.load(Ordering::Relaxed) { std::thread::sleep(std::time::Duration::from_millis(300)); }
+            while DARK.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                // lit by the pointer and at rest since, or about to be lit by what a paired device did: off again
+                if dark_watch::off_again() && DARK.load(Ordering::Relaxed) { panels(true); }
+            }
             unsafe { SetThreadExecutionState(CONTINUOUS); }
         }
         #[cfg(target_os = "macos")]
@@ -1815,7 +1819,9 @@ fn panels(off: bool) {
             fn mouse_event(flags: u32, dx: i32, dy: i32, data: u32, extra: usize);
         }
         // to every top-level window, the system's own "monitor power" request: 2 is off
-        if off { unsafe { PostMessageW(0xFFFF, 0x0112, 0xF170, 2); } }
+        // (to one window of our own where there is one: while a paired device uses the computer this is asked many times a second)
+        let ours = REMOTE_APP.get().and_then(|app| app.get_webview_window("main")).and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize);
+        if off { unsafe { PostMessageW(ours.unwrap_or(0xFFFF), 0x0112, 0xF170, 2); } }
         else { unsafe { mouse_event(0x0001, 1, 0, 0, 0); mouse_event(0x0001, -1, 0, 0, 0); } }
     }
     #[cfg(target_os = "macos")]
@@ -1823,10 +1829,152 @@ fn panels(off: bool) {
     #[cfg(not(any(windows, target_os = "macos")))]
     { let _ = std::process::Command::new("xset").args(["dpms", "force", if off { "off" } else { "on" }]).status(); }
 }
+/// One thing done at the mouse or the keyboard while the screens are dark, and what becomes of it. What a paired device does
+/// (and any other program) goes through to the windows under the black: the device goes on using the computer in the dark.
+/// A hand at the computer brings the screens back with a key or a click, which is swallowed, as it was when it landed on the
+/// black; moving the mouse brings nothing back, and the wheel does nothing. In the first half second nothing brings them
+/// back: the key or the click that asked for the dark is still on its way up.
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
+enum DarkIn { Move, Down, Up, Wheel, KeyDown, KeyUp }
+#[derive(PartialEq, Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
+enum DarkDo { Pass, Eat, Back }
+/// `at_the_computer`: not something a program did. `young`: the dark is less than half a second old. `ate`: a button that
+/// went down at the computer was swallowed, so its coming up is swallowed too.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn dark_input(at_the_computer: bool, what: DarkIn, young: bool, ate: bool) -> DarkDo {
+    if !at_the_computer { return DarkDo::Pass; }
+    match what {
+        DarkIn::Move | DarkIn::KeyUp => DarkDo::Pass,
+        DarkIn::Wheel => DarkDo::Eat,
+        DarkIn::Down => if young { DarkDo::Eat } else { DarkDo::Back },
+        DarkIn::Up => if ate { DarkDo::Eat } else { DarkDo::Pass },
+        DarkIn::KeyDown => if young { DarkDo::Pass } else { DarkDo::Back },
+    }
+}
+/// Windows: while the screens are dark, everything done at the mouse and the keyboard is seen here first (`dark_input` says
+/// what becomes of it), and the black windows let clicks through. Without this the black windows take every click, a paired
+/// device's too, which is how it is on the other systems.
+#[cfg(windows)]
+mod dark_watch {
+    use super::{dark_input, DarkDo, DarkIn};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    #[repr(C)]
+    struct MouseSeen { x: i32, y: i32, data: u32, flags: u32, time: u32, extra: usize }
+    #[repr(C)]
+    struct KeySeen { vk: u32, scan: u32, flags: u32, time: u32, extra: usize }
+    #[repr(C)]
+    struct Msg { window: isize, message: u32, wparam: usize, lparam: isize, time: u32, x: i32, y: i32, private: u32 }
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetWindowsHookExW(which: i32, seen: unsafe extern "system" fn(i32, usize, isize) -> isize, module: isize, thread: u32) -> isize;
+        fn UnhookWindowsHookEx(hook: isize) -> i32;
+        fn CallNextHookEx(hook: isize, code: i32, wparam: usize, lparam: isize) -> isize;
+        fn PeekMessageW(msg: *mut Msg, window: isize, from: u32, to: u32, remove: u32) -> i32;
+        fn TranslateMessage(msg: *const Msg) -> i32;
+        fn DispatchMessageW(msg: *const Msg) -> isize;
+        fn MsgWaitForMultipleObjectsEx(count: u32, handles: *const isize, ms: u32, wake: u32, flags: u32) -> u32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetModuleHandleW(name: *const u16) -> isize;
+        fn GetTickCount64() -> u64;
+    }
+    /// Whether the mouse and the keyboard are being watched (and the black windows let clicks through).
+    pub static ON: AtomicBool = AtomicBool::new(false);
+    /// When the dark began, when the pointer was last moved or the computer last used from a device (0: not since the
+    /// displays were switched off again), and whether a button's going down was swallowed. In milliseconds since the start.
+    static BEGAN: AtomicU64 = AtomicU64::new(0);
+    static STIRRED: AtomicU64 = AtomicU64::new(0);
+    /// When a paired device first did something since the displays were last switched off (0: it has not).
+    static USED: AtomicU64 = AtomicU64::new(0);
+    static ATE: AtomicBool = AtomicBool::new(false);
+    static ENDING: AtomicBool = AtomicBool::new(false);
+    fn now() -> u64 { unsafe { GetTickCount64() } }
+    /// Whether the displays are to be switched off again: said once each time. A hand on the mouse lights them, as it does
+    /// after any idle time, and they go off once it has rested for a while. What a paired device does would light them
+    /// too, at every click: they are switched off again at once, before a display has had the time to come on, and again
+    /// for as long as the device goes on.
+    pub fn off_again() -> bool {
+        let (used, at) = (USED.load(Ordering::Relaxed), STIRRED.load(Ordering::Relaxed));
+        let device = used != 0 && now().saturating_sub(used) >= 40 && USED.compare_exchange(used, 0, Ordering::Relaxed, Ordering::Relaxed).is_ok();
+        let hand = at != 0 && now().saturating_sub(at) > 2500 && STIRRED.compare_exchange(at, 0, Ordering::Relaxed, Ordering::Relaxed).is_ok();
+        device || hand
+    }
+    fn decide(by_a_program: bool, ours: bool, what: DarkIn) -> bool {
+        let age = now().saturating_sub(BEGAN.load(Ordering::Relaxed));
+        if ours { let _ = USED.compare_exchange(0, now().max(1), Ordering::Relaxed, Ordering::Relaxed); }
+        else if !by_a_program && what == DarkIn::Move && age > 2500 { STIRRED.store(now().max(1), Ordering::Relaxed); }
+        match dark_input(!by_a_program, what, age < 500, ATE.load(Ordering::Relaxed)) {
+            DarkDo::Pass => false,
+            DarkDo::Eat => { ATE.store(what == DarkIn::Down, Ordering::Relaxed); true }
+            DarkDo::Back => {
+                ATE.store(what == DarkIn::Down, Ordering::Relaxed);
+                // (this has to return at once, or the system stops asking: the screens are brought back from another thread)
+                if !ENDING.swap(true, Ordering::SeqCst) { std::thread::spawn(|| if let Some(app) = super::REMOTE_APP.get() { super::dark_off(app, true); }); }
+                true
+            }
+        }
+    }
+    unsafe extern "system" fn mouse(code: i32, wparam: usize, lparam: isize) -> isize {
+        if code == 0 {
+            let seen = &*(lparam as *const MouseSeen);
+            let what = match wparam as u32 { 0x0200 => Some(DarkIn::Move), 0x0201 | 0x0204 | 0x0207 | 0x020B => Some(DarkIn::Down), 0x0202 | 0x0205 | 0x0208 | 0x020C => Some(DarkIn::Up), 0x020A | 0x020E => Some(DarkIn::Wheel), _ => None };
+            if let Some(what) = what { if decide(seen.flags & 0x01 != 0, seen.extra == super::screen::OURS, what) { return 1; } }
+        }
+        CallNextHookEx(0, code, wparam, lparam)
+    }
+    unsafe extern "system" fn keys(code: i32, wparam: usize, lparam: isize) -> isize {
+        if code == 0 {
+            let seen = &*(lparam as *const KeySeen);
+            let what = match wparam as u32 { 0x0100 | 0x0104 => DarkIn::KeyDown, _ => DarkIn::KeyUp };
+            if decide(seen.flags & 0x10 != 0, seen.extra == super::screen::OURS, what) { return 1; }
+        }
+        CallNextHookEx(0, code, wparam, lparam)
+    }
+    /// Begin watching, for as long as the screens are dark. Says whether it could: the system is asked from a thread of its
+    /// own, which has to go on answering it.
+    pub fn start() -> bool {
+        let (said, hear) = std::sync::mpsc::channel::<bool>();
+        std::thread::spawn(move || unsafe {
+            let module = GetModuleHandleW(std::ptr::null());
+            let (m, k) = (SetWindowsHookExW(14, mouse, module, 0), SetWindowsHookExW(13, keys, module, 0));
+            if m == 0 || k == 0 {
+                if m != 0 { UnhookWindowsHookEx(m); }
+                if k != 0 { UnhookWindowsHookEx(k); }
+                let _ = said.send(false);
+                return;
+            }
+            BEGAN.store(now(), Ordering::Relaxed);
+            STIRRED.store(0, Ordering::Relaxed);
+            USED.store(0, Ordering::Relaxed);
+            ATE.store(false, Ordering::Relaxed);
+            ENDING.store(false, Ordering::SeqCst);
+            ON.store(true, Ordering::SeqCst);
+            let _ = said.send(true);
+            let mut msg: Msg = std::mem::zeroed();
+            while super::DARK.load(Ordering::SeqCst) {
+                while PeekMessageW(&mut msg, 0, 0, 0, 1) != 0 { TranslateMessage(&msg); DispatchMessageW(&msg); }
+                MsgWaitForMultipleObjectsEx(0, std::ptr::null(), 100, 0x04FF, 0);
+            }
+            ON.store(false, Ordering::SeqCst);
+            UnhookWindowsHookEx(m);
+            UnhookWindowsHookEx(k);
+        });
+        hear.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or(false)
+    }
+}
 fn dark_on(app: &tauri::AppHandle) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     if DARK.swap(true, Ordering::SeqCst) { return Ok(()); }
     let screens = app.available_monitors().map_err(|e| e.to_string()).inspect_err(|_| DARK.store(false, Ordering::SeqCst))?;
+    // where the mouse and the keyboard can be watched, the black windows let clicks through: a paired device goes on using
+    // what is under them, and a hand at the computer still brings the screens back
+    #[cfg(windows)]
+    let through = dark_watch::start();
+    #[cfg(not(windows))]
+    let through = false;
     let mut made = 0;
     for (i, m) in screens.iter().enumerate() {
         let (at, size, scale) = (m.position(), m.size(), m.scale_factor().max(0.1));
@@ -1845,7 +1993,7 @@ fn dark_on(app: &tauri::AppHandle) -> Result<(), String> {
             let _ = w.set_position(tauri::PhysicalPosition::new(at.x, at.y));
             let _ = w.set_size(tauri::PhysicalSize::new(size.width, size.height));
             let _ = w.set_fullscreen(true);
-            if i == 0 { let _ = w.set_focus(); }
+            if through { let _ = w.set_ignore_cursor_events(true); } else if i == 0 { let _ = w.set_focus(); }
             // a paired device that looks at the screens sees what is under the black, not the black
             #[cfg(windows)]
             if let Ok(h) = w.hwnd() { screen::leave_out(h.0 as isize); }
@@ -1866,8 +2014,14 @@ fn dark_off(app: &tauri::AppHandle, wake: bool) {
 }
 #[tauri::command]
 async fn blackout(app: tauri::AppHandle) -> Result<(), String> { dark_on(&app) }
+/// (A black window asks for this at a key or a click. Where the mouse and the keyboard are watched, that is where it is
+/// decided: a key a paired device typed may have reached a black window, and brings nothing back.)
 #[tauri::command]
-fn blackout_end(app: tauri::AppHandle) { dark_off(&app, false) }
+fn blackout_end(app: tauri::AppHandle) {
+    #[cfg(windows)]
+    if dark_watch::ON.load(std::sync::atomic::Ordering::SeqCst) { return; }
+    dark_off(&app, false)
+}
 /// The mouse was moved while the screens are dark and has come to rest: the displays, lit by it, go off again.
 #[tauri::command]
 fn blackout_dim() { if DARK.load(std::sync::atomic::Ordering::SeqCst) { panels(true); } }
@@ -2381,6 +2535,8 @@ fn remote_start() -> Result<u16, String> {
     });
     // the repos are looked at once now, so that the first page to ask for them is answered at once
     std::thread::spawn(|| { let (tx, _nobody) = std::sync::mpsc::channel(); remote_repos(&tx); });
+    // and so are the artifacts: the first look through the records takes a while
+    std::thread::spawn(|| { if let Some(p) = remote_side() { artifacts_all(&p.claude_home); } });
     Ok(port)
 }
 fn remote_stop() {
@@ -2768,11 +2924,153 @@ fn file_tail(f: &Path, bytes: u64) -> String {
 }
 /// What was said in a conversation file, oldest first, as (id, role, text): role is "user", "assistant" or "tool" (one line
 /// saying what was done). Thinking, tool results, side conversations and the program's own notes are left out.
-fn chat_items(text: &str) -> Vec<(String, &'static str, String)> { chat_read(text, false) }
+fn chat_items(text: &str) -> Vec<(String, &'static str, String)> { chat_read(text, false).into_iter().filter(|i| i.1 != "artifact").collect() }
+// ---- Artifacts: the pages a session published (Claude Code's Artifact tool). Each is found in the record of the session,
+// where the tool says "Published <file> at <address> (Version n…)", and is shown as a card to open: in the conversation it
+// was made in, and in a list of all of them. Only addresses at claude.ai are taken for one.
+/// The artifact a step published, from what the step was given (when that is known) and what came back: its address, what
+/// to call it, what it is, and which version this was.
+fn artifact_of(input: &Value, result: &str) -> Option<Value> {
+    let at = result.find("https://claude.ai/")?;
+    if !result.trim_start().starts_with("Published") && !result.trim_start().starts_with("Created") { return None; }
+    let url: String = result[at..].chars().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '/' | '.' | '-' | '_')).collect();
+    let url = url.trim_end_matches('.').to_string();
+    if !url.contains("/artifact/") || url.ends_with("/artifact/") { return None; }
+    let version = result[at..].find("(Version ").and_then(|v| result[at + v + 9..].split(|c: char| !c.is_ascii_digit()).next()?.parse::<u64>().ok()).unwrap_or(1);
+    let t = |k: &str| input[k].as_str().map(one_line).filter(|v| !v.trim().is_empty());
+    // (a page is mostly published as index.html in a folder named for what it is)
+    let from_file = || {
+        let path = input["file_path"].as_str().or_else(|| result.split(" at https://").next().and_then(|r| r.split_whitespace().nth(1)))?;
+        let mut parts = path.rsplit(['/', '\\']);
+        let stem = parts.next()?.rsplit_once('.').map(|(a, _)| a.to_string())?;
+        let named = if stem == "index" { parts.next().filter(|d| !matches!(*d, "page" | "scratchpad" | "artifact" | "dist" | "out")).map(|d| d.to_string())? } else { stem };
+        Some(named.replace(['-', '_'], " "))
+    };
+    let desc = t("description").unwrap_or_default();
+    let title = t("title").or_else(from_file).or_else(|| Some(desc.clone()).filter(|d| !d.is_empty())).unwrap_or_else(|| "Artifact".into());
+    let cut = |v: String, n: usize| if v.chars().count() > n { format!("{}…", v.chars().take(n).collect::<String>()) } else { v };
+    Some(json!({ "url": url, "title": cut(title, 90), "desc": cut(desc, 220), "version": version }))
+}
+/// What a step's result says, as text.
+fn result_text(b: &Value) -> String {
+    match &b["content"] { Value::String(t) => t.clone(), Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"), _ => String::new() }
+}
+/// Every artifact the sessions of the last weeks published, the newest first, each once (its latest version): from the records
+/// Claude Code keeps under `home`. The records are large (gigabytes together), so what was found in each is kept, in memory
+/// and in a file in the app's own folder (`artifacts.json`): a record is read again only where it has grown, and one look runs at a time.
+fn artifacts_all(home: &Path) -> Vec<Value> {
+    // of each record: when it was changed, how long it was, and what was found in it
+    type Seen = std::collections::HashMap<String, (u64, u64, Vec<Value>)>;
+    static SEEN: Mutex<Option<Seen>> = Mutex::new(None);
+    static ONE: Mutex<()> = Mutex::new(());
+    let _one = ONE.lock();
+    let kept = app_data().map(|d| d.join("artifacts.json"));
+    let mut seen: Seen = SEEN.lock().ok().and_then(|s| s.clone()).unwrap_or_else(|| {
+        kept.as_ref().and_then(|f| serde_json::from_str::<Value>(&rd(f)).ok()).and_then(|v| v.as_object().map(|o| o.iter().filter_map(|(k, e)| Some((k.clone(), (e[0].as_u64()?, e[1].as_u64()?, e[2].as_array()?.clone())))).collect())).unwrap_or_default()
+    });
+    let now = now_secs();
+    let mut files: Vec<(u64, u64, PathBuf)> = vec![];
+    for dir in fs::read_dir(home.join("projects")).into_iter().flatten().flatten() {
+        for e in fs::read_dir(dir.path()).into_iter().flatten().flatten() {
+            let path = e.path();
+            if path.extension().map(|x| x != "jsonl").unwrap_or(true) { continue; }
+            let Ok(m) = e.metadata() else { continue };
+            let at = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+            if now.saturating_sub(at) < 30 * 86400 { files.push((at, m.len(), path)); }
+        }
+    }
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files.truncate(150);
+    let (mut all, mut changed, mut next): (Vec<Value>, bool, Seen) = (vec![], false, Default::default());
+    for (at, len, path) in files {
+        let key = path.to_string_lossy().to_string();
+        let found = match seen.remove(&key) {
+            Some((was_at, was_len, found)) if was_at == at && was_len == len => found,
+            // a record only grows at its end: what was added is read, and what was found before stays
+            Some((_, was_len, mut found)) if was_len < len => { changed = true; found.extend(artifacts_read(&path, was_len)); found }
+            _ => { changed = true; artifacts_read(&path, 0) }
+        };
+        all.extend(found.iter().cloned());
+        next.insert(key, (at, len, found));
+    }
+    if changed {
+        if let Some(f) = kept.as_ref() {
+            let _ = f.parent().map(fs::create_dir_all);
+            let _ = fs::write(f, Value::Object(next.iter().map(|(k, e)| (k.clone(), json!([e.0, e.1, e.2]))).collect()).to_string());
+        }
+    }
+    if let Ok(mut s) = SEEN.lock() { *s = Some(next); }
+    // each artifact once: its newest version, with what it was first called if a later publish did not say
+    all.sort_by(|a, b| b["when"].as_str().cmp(&a["when"].as_str()));
+    let mut out: Vec<Value> = vec![];
+    for a in all {
+        match out.iter_mut().find(|o| o["url"] == a["url"]) {
+            Some(o) => { for k in ["title", "desc"] { if (o[k] == "" || o[k] == "Artifact") && a[k] != "" { o[k] = a[k].clone(); } } }
+            None => out.push(a),
+        }
+    }
+    out.truncate(200);
+    out
+}
+/// A record from `from` on, line by line (a record can be tens of megabytes): only the lines that can matter are kept.
+fn artifacts_read(path: &Path, from: u64) -> Vec<Value> {
+    use std::io::{BufRead, Seek, SeekFrom};
+    let Ok(mut file) = fs::File::open(path) else { return vec![] };
+    if from > 0 && file.seek(SeekFrom::Start(from)).is_err() { return vec![]; }
+    let mut lines = String::new();
+    let mut reader = std::io::BufReader::with_capacity(1 << 20, file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) { Ok(0) | Err(_) => break, Ok(_) => {} }
+        let text = String::from_utf8_lossy(&line);
+        if text.contains("\"name\":\"Artifact\"") || (text.contains("https://claude.ai/") && text.contains("tool_result")) { lines.push_str(&text); if !text.ends_with('\n') { lines.push('\n'); } }
+    }
+    artifacts_in(&lines)
+}
+/// The artifacts one record of a session holds: each with when it was published and in which project's folder.
+fn artifacts_in(text: &str) -> Vec<Value> {
+    let mut given: std::collections::HashMap<String, Value> = Default::default();
+    let mut out = vec![];
+    for line in text.lines() {
+        let (used, came) = (line.contains("\"name\":\"Artifact\""), line.contains("https://claude.ai/") && line.contains("tool_result"));
+        if !used && !came { continue; }
+        let Ok(o) = serde_json::from_str::<Value>(line) else { continue };
+        if o["isSidechain"].as_bool().unwrap_or(false) { continue; }
+        let Some(blocks) = o["message"]["content"].as_array() else { continue };
+        for b in blocks {
+            if b["type"] == "tool_use" && b["name"] == "Artifact" { if let Some(id) = b["id"].as_str() { given.insert(id.to_string(), b["input"].clone()); } }
+            if b["type"] == "tool_result" && !b["is_error"].as_bool().unwrap_or(false) {
+                let input = b["tool_use_id"].as_str().and_then(|id| given.get(id)).cloned().unwrap_or(Value::Null);
+                if let Some(mut a) = artifact_of(&input, &result_text(b)) {
+                    a["when"] = o["timestamp"].clone();
+                    a["project"] = json!(o["cwd"].as_str().and_then(|c| c.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next()).unwrap_or(""));
+                    out.push(a);
+                }
+            }
+        }
+    }
+    out
+}
+/// The artifacts of the sessions on this computer, for the window.
+#[tauri::command(async)]
+fn artifacts(cur: State<Cur>, window: tauri::WebviewWindow) -> Result<Value, String> {
+    Ok(json!(artifacts_all(&project(&cur, &window)?.claude_home)))
+}
+/// Open an artifact in the browser: an address at claude.ai and nothing else.
+#[tauri::command]
+fn artifact_open(url: String) -> Result<(), String> {
+    if !url.starts_with("https://claude.ai/") || !url.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '/' | '.' | '-' | '_')) { return Err("not an artifact's address".into()); }
+    let mut c = std::process::Command::new(if cfg!(windows) { "explorer.exe" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
+    c.arg(url);
+    quiet(c).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
 /// The same, read one way or the other: as a conversation (what was said, and one line per step), or in `detail` (each step with
 /// all it was given and what came back, and the reasoning between them where the record holds any).
 fn chat_read(text: &str, detail: bool) -> Vec<(String, &'static str, String)> {
     let mut out = vec![];
+    // what each Artifact step was given, to name the page its result says was published
+    let mut published: std::collections::HashMap<String, Value> = Default::default();
     let clip = |t: &str, n: usize| -> String { let t = t.trim(); if t.chars().count() > n { format!("{}…", t.chars().take(n).collect::<String>()) } else { t.to_string() } };
     for line in text.lines() {
         // most lines of the file are not messages: skip them before they are parsed
@@ -2795,6 +3093,11 @@ fn chat_read(text: &str, detail: bool) -> Vec<(String, &'static str, String)> {
         match &o["message"]["content"] {
             Value::String(t) => if said(t) { out.push((id.to_string(), role, clip(t, 8000))); },
             Value::Array(blocks) => for (i, b) in blocks.iter().enumerate() {
+                if b["type"] == "tool_use" && b["name"] == "Artifact" { if let Some(k) = b["id"].as_str() { published.insert(k.to_string(), b["input"].clone()); } }
+                if b["type"] == "tool_result" && !b["is_error"].as_bool().unwrap_or(false) {
+                    let input = b["tool_use_id"].as_str().and_then(|k| published.get(k)).cloned().unwrap_or(Value::Null);
+                    if let Some(a) = artifact_of(&input, &result_text(b)) { out.push((format!("{id}-{i}-a"), "artifact", a.to_string())); }
+                }
                 match b["type"].as_str() {
                     Some("text") => { let t = b["text"].as_str().unwrap_or(""); if said(t) { out.push((format!("{id}-{i}"), role, clip(t, 8000))); } }
                     Some("thinking") if detail => { let t = b["thinking"].as_str().unwrap_or(""); if !t.trim().is_empty() { out.push((format!("{id}-{i}"), "thinking", clip(t, 8000))); } }
@@ -3271,16 +3574,19 @@ mod screen {
         fn GetCursorPos(at: *mut Point) -> i32;
         fn MapVirtualKeyW(code: u32, how: u32) -> u32;
     }
+    /// What goes with everything done here to the pointer and the keys, so that it can be told from a hand at the computer
+    /// (dark screens stay dark under the one, and come back at the other).
+    pub const OURS: usize = 0x4D41_4553;
     /// What the system is handed is this many bytes for the mouse and for a key alike (a 64-bit Windows).
     pub const INPUT_SIZE: usize = 40;
     #[cfg(test)]
     pub fn input_sizes() -> (usize, usize) { (std::mem::size_of::<MouseIn>(), std::mem::size_of::<KeyIn>()) }
     fn mouse(flags: u32, dx: i32, dy: i32, data: u32) -> bool {
-        let i = MouseIn { kind: 0, _pad: 0, dx, dy, data, flags, time: 0, extra: 0 };
+        let i = MouseIn { kind: 0, _pad: 0, dx, dy, data, flags, time: 0, extra: OURS };
         unsafe { SendInput(1, &i as *const MouseIn as *const u8, INPUT_SIZE as i32) == 1 }
     }
     fn key(vk: u16, scan: u16, flags: u32) -> bool {
-        let i = KeyIn { kind: 1, _pad: 0, vk, scan, flags, time: 0, extra: 0, _fill: 0 };
+        let i = KeyIn { kind: 1, _pad: 0, vk, scan, flags, time: 0, extra: OURS, _fill: 0 };
         unsafe { SendInput(1, &i as *const KeyIn as *const u8, INPUT_SIZE as i32) == 1 }
     }
     /// (for the tests: where the pointer is among the displays, and whether a key is down)
@@ -3410,7 +3716,7 @@ mod screen {
 }
 /// One thing a device asked of the pointer or the keys, done if it may and is looking at one display: the pointer to a place
 /// on that display (`at`, as parts of its width and height) or moved by an amount (`move`, in the display's pixels), a button
-/// down or up, a click, the wheel, a key with the keys held beside it, or text. Says whether anything was done.
+/// down or up, a click, the wheel, a key with the keys held beside it, text to type, or text to paste. Says whether anything was done.
 #[cfg(windows)]
 fn screen_input(w: &Watch, m: &Value) -> bool {
     use std::sync::atomic::Ordering;
@@ -3447,6 +3753,19 @@ fn screen_input(w: &Watch, m: &Value) -> bool {
             None => false,
         },
         "text" => { let t: String = m["t"].as_str().unwrap_or("").chars().take(2000).collect(); screen::type_text(&t); !t.is_empty() }
+        // what the device had copied becomes what the computer has copied, and is pasted where the keys go: as one paste,
+        // whatever its length and its lines (typed, each new line would be the Enter key)
+        "paste" => {
+            let t: String = m["t"].as_str().unwrap_or("").chars().take(200_000).collect();
+            if !t.is_empty() && clip_set(t).is_ok() {
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                screen::press(0x11, false, true);
+                screen::press(0x56, false, true);
+                screen::press(0x56, false, false);
+                screen::press(0x11, false, false);
+                true
+            } else { false }
+        }
         _ => false,
     };
     screen::unaware(was);
@@ -3653,6 +3972,10 @@ fn remote_op(text: &str, device: &str, tx: &std::sync::mpsc::Sender<String>, fra
                 }
                 let _ = tx.send(remote_list().to_string());
             });
+        }
+        "artifacts" => {
+            let tx = tx.clone();
+            std::thread::spawn(move || { let items = remote_side().map(|p| artifacts_all(&p.claude_home)).unwrap_or_default(); let _ = tx.send(json!({ "op": "artifacts", "items": items }).to_string()); });
         }
         "repos" => {
             let tx = tx.clone();
@@ -3999,7 +4322,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            blackout, blackout_end, blackout_dim, load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, drag, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_permit, remote_secure_only, remote_allow, remote_secure,
+            blackout, blackout_end, blackout_dim, load, read_log, read_audit, read_memory, save_memory, new_memory, read_skill, save_skill, new_skill, save_law, move_law, retire_law, ledger, mark_live, close_rows, audit, end_session, git_repos, git_status, git_log, git_commit, git_diff, git_tree, git_file, projects, set_project, inspect_project, add_project, machine, starter_plan, starter_apply, term_check, update_check, update_state, update_auto_set, update_page, update_install, remove_project, set_favorite, pick_folder, autostart_get, autostart_set, term_open, term_list, term_write, term_resize, term_close, term_label, pop_out, pop_view, set_on_top, attention, toggle_max, drag, artifacts, artifact_open, note, clip_set, clip_get, minimize, hide, quit, remote_state, remote_set, remote_pair, remote_forget, remote_permit, remote_secure_only, remote_allow, remote_secure,
         ])
         .run(tauri::generate_context!())
         .expect("Maestro could not start");
@@ -4528,6 +4851,48 @@ mod tests {
         assert!(secure_only(true, false));
         assert!(!secure_only(true, true)); // this machine itself, and what Tailscale hands on from the secure address
         assert!(!secure_only(false, false) && !secure_only(false, true));
+    }
+    #[test]
+    fn in_the_dark_a_device_goes_on_and_a_hand_at_the_computer_brings_the_screens_back() {
+        use DarkIn::*;
+        // a paired device, or any program: everything goes through to what is under the black
+        for what in [Move, Down, Up, Wheel, KeyDown, KeyUp] { for young in [true, false] { for ate in [true, false] { assert_eq!(dark_input(false, what, young, ate), DarkDo::Pass); } } }
+        // at the computer: a key or a click brings the screens back and goes no further
+        assert_eq!((dark_input(true, Down, false, false), dark_input(true, KeyDown, false, false)), (DarkDo::Back, DarkDo::Back));
+        // moving the mouse does not, the wheel does nothing, and a key that comes up is never held back (it would stay down)
+        assert_eq!((dark_input(true, Move, false, false), dark_input(true, Wheel, false, false), dark_input(true, KeyUp, false, true)), (DarkDo::Pass, DarkDo::Eat, DarkDo::Pass));
+        // a button that was swallowed going down is swallowed coming up; one that went down before the dark is not
+        assert_eq!((dark_input(true, Up, false, true), dark_input(true, Up, false, false)), (DarkDo::Eat, DarkDo::Pass));
+        // the first half second: the click that asked for the dark is swallowed, the keys that asked for it are left alone
+        assert_eq!((dark_input(true, Down, true, false), dark_input(true, KeyDown, true, false)), (DarkDo::Eat, DarkDo::Pass));
+    }
+    #[test]
+    fn an_artifact_is_found_where_a_session_published_it() {
+        let said = "Published /tmp/x/scratchpad/type-report/index.html at https://claude.ai/artifact/1jU3nT4rxJQ1nP8zvNAXc4 (Version 3, version id 17-86b7) Icon: \"type\".\n\nLive subscription: see https://claude.ai/artifact/other";
+        let a = artifact_of(&json!({ "file_path": "/tmp/x/scratchpad/type-report/index.html", "description": "Why the type reads as generated" }), said).unwrap();
+        assert_eq!(a, json!({ "url": "https://claude.ai/artifact/1jU3nT4rxJQ1nP8zvNAXc4", "title": "type report", "desc": "Why the type reads as generated", "version": 3 }));
+        assert_eq!(artifact_of(&json!({ "title": "Plan" }), said).unwrap()["title"], "Plan");
+        // what the step was given is not known (it is further back than was read): the file's name, from what came back
+        assert_eq!(artifact_of(&Value::Null, said).unwrap()["title"], "type report");
+        assert_eq!(artifact_of(&Value::Null, "Published /tmp/page/index.html at https://claude.ai/code/artifact/ab-12.").unwrap(), json!({ "url": "https://claude.ai/code/artifact/ab-12", "title": "Artifact", "desc": "", "version": 1 }));
+        // not one: the list of kinds of artifact, an address elsewhere, a refusal
+        assert!(artifact_of(&Value::Null, "Quickstart. Start from https://claude.ai/artifact/GZLZ").is_none());
+        assert!(artifact_of(&Value::Null, "Published x at https://example.com/artifact/abc").is_none());
+        assert!(artifact_of(&Value::Null, "Published x at https://claude.ai/chat/abc").is_none());
+        let line = |kind: &str, content: Value, at: &str| json!({ "type": kind, "uuid": format!("u{at}"), "timestamp": at, "cwd": "/mnt/d/projects/tidepool", "message": { "content": content } }).to_string();
+        let record = [
+            line("assistant", json!([{ "type": "tool_use", "id": "t1", "name": "Artifact", "input": { "action": "quickstart", "intent": "other" } }]), "1"),
+            line("user", json!([{ "type": "tool_result", "tool_use_id": "t1", "content": "Quickstart. Types: https://claude.ai/artifact/GZLZ" }]), "2"),
+            line("assistant", json!([{ "type": "text", "text": "Here it is." }, { "type": "tool_use", "id": "t2", "name": "Artifact", "input": { "file_path": "/s/plan.html", "title": "The plan" } }]), "3"),
+            line("user", json!([{ "type": "tool_result", "tool_use_id": "t2", "content": [{ "type": "text", "text": "Published /s/plan.html at https://claude.ai/artifact/abc (Version 1)" }] }]), "4"),
+            line("user", json!([{ "type": "tool_result", "tool_use_id": "t3", "is_error": true, "content": "Published /s/no.html at https://claude.ai/artifact/no" }]), "5"),
+        ].join("\n");
+        assert_eq!(artifacts_in(&record), vec![json!({ "url": "https://claude.ai/artifact/abc", "title": "The plan", "desc": "", "version": 1, "when": "4", "project": "tidepool" })]);
+        let chat = chat_read(&record, false);
+        let card = chat.iter().find(|i| i.1 == "artifact").expect("the conversation shows it");
+        assert_eq!((card.0.as_str(), serde_json::from_str::<Value>(&card.2).unwrap()["title"].clone()), ("u4-0-a", json!("The plan")));
+        assert!(chat_items(&record).iter().all(|i| i.1 != "artifact"));
+        assert!(artifact_open("https://claude.ai.evil.example/x".into()).is_err() && artifact_open("https://claude.ai/artifact/a b".into()).is_err());
     }
     #[test]
     fn a_key_is_known_by_its_name() {

@@ -6,6 +6,8 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
 ## [Unreleased]
 
 ### Added
+- Artifacts: the pages your sessions published, as a tab in the app and on the remote page, and as a card in the
+  conversation that made each one. A tap opens the page.
 - The computer's screens on a paired device: Screens on the remote page shows every display, and one of them alone, enlarged
   with two fingers and filling the phone when it is turned. Only the parts of a display that changed are sent. Windows only
   for now.
@@ -18,6 +20,12 @@ Notable changes, newest first. The format follows [Keep a Changelog](https://kee
   every display off and keeps the computer awake, so sessions go on and a phone still reaches them. A key or a click brings
   the screens back; moving the mouse does not.
 - A release has a name of its own (0.4.1.1) beside the three numbers Cargo builds.
+
+### Changed
+- Using the computer from a phone: **paste** in the row of keys sends what the phone has copied to the computer and pastes
+  it there, and `^C`, `^V`, `^X`, `^A`, `^Z` are one tap each.
+- With the screens dark, a paired device goes on using the computer in the dark: its clicks and keys reach the windows under
+  the black. A key or a click at the computer itself still brings the screens back. (Windows.)
 
 ### Fixed
 - On Windows, a quick click on the top bar no longer stops the window from being dragged until the app is started again.

@@ -5,10 +5,11 @@ phone. Rust and Tauri 2, one Rust file and one page. Open source (MIT).
 ## Current State
 **Last updated:** 2026-11-23
 - Released: 0.4.1. Unreleased on `feature/blackout`: dark screens, a release name beside the Cargo version.
-- On `feature/takeover`, installed on the maintainer's machine: the computer's screens on a paired device and its pointer
-  and keys, permissions given device by device, a daily token change, an "only the secure address" setting, and a fix for
-  a window that could no longer be dragged. Checked against a throwaway server in a desktop browser; clicks, typing and
-  touch on a real phone are still to be tried.
+- On `main` (not yet released): the computer's screens on a paired device with its pointer and keys, permissions device by
+  device, a daily token change, "only the secure address", the window-drag fix.
+- On `feature/dark-control` (pushed, not merged; installed on the maintainer's machine): a device goes on using the computer
+  while the screens are dark, a paste key and copy/paste keys on the phone, and artifacts (a card in the conversation, a
+  list on the phone and in the app). Tried by the maintainer in part; a real paste and the desktop list on real data are not.
 
 ## Roadmap
 - [ ] M001: Takeover — see and use the computer's screens from a paired device
@@ -28,7 +29,7 @@ phone. Rust and Tauri 2, one Rust file and one page. Open source (MIT).
   - [ ] Phase 3: beyond the first cut (TAKE-07)
     - [ ] macOS and Linux capture and input
     - [ ] A device proves itself with a key that cannot be copied out of its browser (needs the secure address)
-    - [ ] Using the pointer from a device without ending dark screens
+    - [x] Using the pointer from a device without ending dark screens (Windows; built, to be tried in the dark)
     - [ ] Video (H.264) where a secure address allows it, if pictures prove too slow
 
 ## Current Focus

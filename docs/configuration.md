@@ -34,6 +34,8 @@ home screen measures, and the number of characters it is held against.
 On disk, only this:
 
 - `maestro.config.json` and `maestro.log` (interface errors), in the folder above.
+- `artifacts.json`, in the app's own data folder: which artifacts each session record was found to hold, so the records are
+  not read again. It can be deleted.
 - A memory, skill or rule when you save an edit. The first copy of a changed file each day is kept in `<harness>/archive/`
   (skills: `~/.claude/backups/`). A retired rule is kept in `<harness>/archive/retired-laws.md`.
 - The starter harness, when you ask for it: missing files only, nothing is replaced.

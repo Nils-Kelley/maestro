@@ -316,12 +316,12 @@ const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const num = (n) => Number(n || 0).toLocaleString();
 const kk = (n) => n >= 1000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'k' : String(n);
-const ALL_TABS = [['all', 'All'], ['claude', 'Console'], ['memory', 'Memory'], ['skill', 'Skills'], ['rule', 'Rules'], ['audit', 'Audits'], ['work', 'Work'], ['git', 'Git'], ['ship', 'Ship'], ['sessions', 'Sessions'], ['checks', 'Checks'], ['hooks', 'Hooks']];
+const ALL_TABS = [['all', 'All'], ['claude', 'Console'], ['memory', 'Memory'], ['skill', 'Skills'], ['rule', 'Rules'], ['audit', 'Audits'], ['artifacts', 'Artifacts'], ['work', 'Work'], ['git', 'Git'], ['ship', 'Ship'], ['sessions', 'Sessions'], ['checks', 'Checks'], ['hooks', 'Hooks']];
 let TABS = ALL_TABS;
 // a tab is shown when the project has something for it: a ledger, registered checks, session drafts, audits or a log are not in every harness
 const FITS = { ship: () => D.ledger.total > 0 || D.project.kit, checks: () => (D.registry || []).length > 0 || !!D.probes, sessions: () => D.sessions.drafts > 0, audit: () => (D.audits || []).length > 0, work: () => D.log.length > 0 };
 function fitTabs() { TABS = D.empty ? [] : ALL_TABS.filter(([k]) => !FITS[k] || FITS[k]() || k === tab); }
-const PAGES = { claude: drawClaude, git: drawGit, ship: drawShip, sessions: drawSessions, checks: drawChecks, hooks: drawHooks, projects: drawProjectsPage, setup: drawSetup, update: drawUpdate, remote: drawRemote };
+const PAGES = { claude: drawClaude, git: drawGit, ship: drawShip, sessions: drawSessions, checks: drawChecks, hooks: drawHooks, artifacts: drawArtifacts, projects: drawProjectsPage, setup: drawSetup, update: drawUpdate, remote: drawRemote };
 const keyOf = (h) => h.kind === 'action' ? 'x:' + h.title : h.kind === 'memory' ? 'm:' + h.m.f : h.kind === 'skill' ? `s:${h.sk.scope}/${h.sk.name}` : h.kind === 'rule' ? 'r:' + JSON.stringify(h.ref) : h.kind === 'audit' ? 'a:' + (h.a.path || h.a.slug) : 'w:' + h.e.slug;
 const HINT = { all: 'Search everything, or type > for actions', memory: 'Search memories', skill: 'Search skills', audit: 'Search audits', hooks: 'Filter the hooks', claude: 'Type > for actions', git: 'Filter files or commits', projects: 'Projects', setup: 'Set up a harness', update: 'Updates', remote: 'Remote access', rule: 'Search rules', work: 'Search the work log', ship: 'Filter the open rows', sessions: 'Sessions', checks: 'Filter the probes' };
 let LEDGER = null, AUDIT = null, PROJ = { names: [], current: 0 };
@@ -353,7 +353,7 @@ function search() {
   if (tab === 'all') { const order = ['memory', 'skill', 'rule', 'audit', 'work']; hits = order.flatMap((k) => hits.filter((h) => h.kind === k).slice(0, 40)); } // kinds stay together, best first inside each
 }
 const KIND = { memory: 'Memory', skill: 'Skills', rule: 'Rules', audit: 'Audits', work: 'Work', action: 'Actions' };
-function drawTabs() { const n = { all: ITEMS.length, memory: D.memories.length, rule: ITEMS.filter((i) => i.kind === 'rule').length, work: D.log.length, ship: openRows(), sessions: D.sessions.live, checks: (D.registry || []).length, claude: CC.list.filter((x) => x.live).length || '', git: G.status ? G.status.total : '', skill: (D.skills || []).length, audit: (D.audits || []).length, hooks: (D.hooks || []).length }; $('#tabs').innerHTML = TABS.map(([k, t]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${t}<span>${n[k] === '' ? '' : num(n[k])}</span></button>`).join(''); }
+function drawTabs() { const n = { artifacts: ARTS.items ? ARTS.items.length || '' : '', all: ITEMS.length, memory: D.memories.length, rule: ITEMS.filter((i) => i.kind === 'rule').length, work: D.log.length, ship: openRows(), sessions: D.sessions.live, checks: (D.registry || []).length, claude: CC.list.filter((x) => x.live).length || '', git: G.status ? G.status.total : '', skill: (D.skills || []).length, audit: (D.audits || []).length, hooks: (D.hooks || []).length }; $('#tabs').innerHTML = TABS.map(([k, t]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${t}<span>${n[k] === '' ? '' : num(n[k])}</span></button>`).join(''); }
 function drawList() {
   const cmd = $('#q').value.trimStart().startsWith('>');
   const home = tab === 'all' && !$('#q').value.trim(); $('#body').classList.toggle('home', !cmd && (home || !!PAGES[tab])); $('#q').placeholder = HINT[tab];
@@ -999,6 +999,15 @@ async function create() {
     editing = null; $('#q').value = ''; await reload(); const at = hits.findIndex((h) => kind === 'memory' ? h.kind === 'memory' && h.m.f === made : h.kind === 'skill' && h.sk.name === made); sel = at < 0 ? 0 : at; drawList(); say(kind === 'memory' ? 'Memory created and added to the index' : `Skill /${made} created`, 'ok'); $('#q').focus();
   } catch (e) { say(String(e), 'bad'); }
 }
+// Artifacts: the pages the sessions on this computer published, the newest first. A row opens the page in the browser.
+const ARTS = { items: null, at: 0, busy: false };
+function drawArtifacts() {
+  if (!ARTS.busy && Date.now() - ARTS.at > 5000) { ARTS.busy = true; invoke('artifacts').then((a) => { ARTS.items = a || []; }).catch(() => { ARTS.items = ARTS.items || []; }).then(() => { ARTS.busy = false; ARTS.at = Date.now(); drawTabs(); if (tab === 'artifacts') drawArtifacts(); }); }
+  const q = $('#q').value.trim().toLowerCase(), L = (ARTS.items || []).filter((a) => !q || `${a.title} ${a.desc} ${a.project}`.toLowerCase().includes(q));
+  const ago = (t) => { const d = (Date.now() - Date.parse(t)) / 1000; return !(d >= 0) ? '' : d < 90 ? 'just now' : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : `${Math.round(d / 86400)} d ago`; };
+  $('#view').innerHTML = `<h1>Artifacts</h1><p class="lead">The pages your sessions published in the last month, on any project. A row opens the page in your browser; a paired phone has the same list, and a card in the conversation that made each one.</p>
+  ${ARTS.items === null ? '<p class="dim">Looking through the sessions…</p>' : !L.length ? `<p class="dim">${q ? 'None matches.' : 'No session has published one yet.'}</p>` : tbl(['Artifact', 'Project', 'Version', 'Published', ''], L.map((a) => `<tr><td><b>${esc(a.title)}</b>${a.desc && !a.desc.startsWith(a.title.replace(/…$/, '')) ? `<div class="dim" style="max-width:70ch">${esc(a.desc)}</div>` : ''}</td><td class="k">${esc(a.project)}</td><td class="k">${esc(a.version)}</td><td class="k">${esc(ago(a.when))}</td><td><button class="act" data-art="${esc(a.url)}">Open</button></td></tr>`))}`;
+}
 function drawHooks() {
   const q = $('#q').value.trim().toLowerCase(), H = (D.hooks || []).filter((h) => !q || (h.when + ' ' + h.on + ' ' + h.runs).toLowerCase().includes(q));
   $('#view').innerHTML = `<h1>Hooks</h1><p class="lead">Commands that run on their own at fixed moments: when a session starts, before or after the agent edits a file, when it stops. They are set in <code>settings.json</code>, yours for every project and the project's own. This screen shows them; it does not change them yet.</p>
@@ -1184,6 +1193,7 @@ document.addEventListener('click', (e) => {
   if (t.closest('[data-browse]')) return invoke('pick_folder').then((f) => { if (f) look(f); }).catch((err) => say(String(err), 'bad'));
   if (t.closest('[data-look]')) return look($('#p-folder').value);
   if (t.closest('[data-addproj]')) return invoke('add_project', { folder: FOUND.typed, name: $('#p-name').value, runs: FOUND.entry.runs }).then(async (at) => { FOUND = null; LEDGER = null; AUDIT = null; PLAN = null; gitReset(); tab = 'all'; await drawProjects(); await reload(); if (D.project.bare) tab = 'setup'; fitTabs(); nameView(); drawTabs(); drawList(); say(`Added and opened ${PROJ.names[at]}`, 'ok'); $('#q').focus(); }).catch((err) => say(String(err), 'bad'));
+  if (t.closest('[data-art]')) return void invoke('artifact_open', { url: t.closest('[data-art]').dataset.art }).catch((err) => say(String(err), 'bad'));
   if (t.closest('[data-remote]')) { const b = t.closest('[data-remote]'); const what = b.dataset.remote;
     if (what === 'permit') { if (b.dataset.howlong) { b.outerHTML = [[1, 'For an hour'], [24, 'For a day'], [0, 'Until I take it back']].map(([h, t]) => `<button class="act go" data-remote="permit" data-what="${esc(b.dataset.what)}" data-id="${esc(b.dataset.id)}" data-on="1" data-hours="${h}">${t}</button>`).join(''); return; } b.disabled = true; return invoke('remote_permit', { id: b.dataset.id, what: b.dataset.what, on: !!b.dataset.on, hours: Number(b.dataset.hours) || null }).then((r) => { remotePill(r); if (tab === 'remote') drawRemote(r); }).catch((err) => { b.disabled = false; say(String(err), 'bad'); }); }
     if (what === 'only-on' || what === 'only-off') { b.disabled = true; return invoke('remote_secure_only', { on: what === 'only-on' }).then((r) => { remotePill(r); if (tab === 'remote') drawRemote(r); say(what === 'only-on' ? 'Other devices are answered at the secure address only' : 'The plain address answers again', 'ok'); }).catch((err) => { b.disabled = false; say(String(err), 'bad'); }); }
